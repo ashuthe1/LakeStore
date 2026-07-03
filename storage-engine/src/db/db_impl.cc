@@ -30,16 +30,16 @@ DBImpl::~DBImpl() {
 }
 
 Status DBImpl::Open(const Options& options, const std::string& dbpath, DBImpl** dbptr) {
-    std::cout << "DEBUG: Entering Open()" << std::endl;
+    // std::cout << "DEBUG: Entering Open()" << std::endl;
     *dbptr = nullptr;
     DBImpl* impl = new DBImpl(options, dbpath);
     
     impl->mutex_.lock();
     // 1. Read MANIFEST to restore state (Step 9)
-    std::cout << "DEBUG: Manifest Open()" << std::endl;
+    // std::cout << "DEBUG: Manifest Open()" << std::endl;
     Status s = impl->manifest_->Open();
     if (!s.ok()) {
-        std::cout << "DEBUG: Manifest Open failed: " << s.ToString() << std::endl;
+        // std::cout << "DEBUG: Manifest Open failed: " << s.ToString() << std::endl;
         impl->mutex_.unlock();
         delete impl;
         return s;
@@ -92,12 +92,12 @@ Status DBImpl::Recover() {
 }
 
 Status DBImpl::Write(const WriteOptions& opts, WriteBatch* batch) {
-    std::cout << "  [Write] Entered Write()" << std::endl;
+    // std::cout << "  [Write] Entered Write()" << std::endl;
     if (!bg_error_.ok()) return bg_error_;
     if (!wal_) return Status::IOError("WAL not initialized - DB might be corrupted");
 
     uint32_t op_count = CountOps(batch);
-    std::cout << "  [Write] CountOps found " << op_count << " operations" << std::endl;
+    // std::cout << "  [Write] CountOps found " << op_count << " operations" << std::endl;
 
     SequenceNumber base_seq = last_sequence_.fetch_add(op_count) + 1;
     batch->sequence_number = base_seq;
@@ -107,19 +107,19 @@ Status DBImpl::Write(const WriteOptions& opts, WriteBatch* batch) {
     MemTable* mem_to_insert = mem_;
     lock.unlock();
 
-    std::cout << "  [Write] Calling WAL Append..." << std::endl;
+    // std::cout << "  [Write] Calling WAL Append..." << std::endl;
     Status s = wal_->Append(batch);
     if (opts.sync && s.ok()) s = wal_->Sync();
 
     lock.lock();
     if (!s.ok()) {
-        std::cout << "  [Write] WAL Append failed!" << std::endl;
+        // std::cout << "  [Write] WAL Append failed!" << std::endl;
         return s;
     }
 
-    std::cout << "  [Write] Calling DecodeAndInsert..." << std::endl;
+    // std::cout << "  [Write] Calling DecodeAndInsert..." << std::endl;
     DecodeAndInsert(mem_to_insert, base_seq, batch->payload);
-    std::cout << "  [Write] MemTable insertion complete." << std::endl;
+    // std::cout << "  [Write] MemTable insertion complete." << std::endl;
 
     if (mem_to_insert->ApproximateMemoryUsage() > 64 * 1024 * 1024) {
         imm_ = mem_;
@@ -138,7 +138,7 @@ Status DBImpl::Put(const WriteOptions& opts, const Slice& key, const Slice& valu
     PutVarint32(&batch.payload, value.size);
     batch.payload.append(value.data, value.size);
     
-    std::cout << "  [Put] Constructed payload of size: " << batch.payload.size() << std::endl;
+    // std::cout << "  [Put] Constructed payload of size: " << batch.payload.size() << std::endl;
     return Write(opts, &batch);
 }
 
@@ -285,40 +285,40 @@ uint32_t DBImpl::CountOps(const WriteBatch* batch) {
     uint32_t count = 0;
     Slice input(batch->payload);
     
-    std::cout << "    [CountOps] Input size: " << input.size << " | Bytes: ";
-    for(size_t i = 0; i < input.size; i++) {
-        printf("%02x ", (unsigned char)input.data[i]);
-    }
-    std::cout << std::endl;
+    // std::cout << "    [CountOps] Input size: " << input.size << " | Bytes: ";
+    // for(size_t i = 0; i < input.size; i++) {
+    //     printf("%02x ", (unsigned char)input.data[i]);
+    // }
+    // std::cout << std::endl;
 
     while (input.size > 0) {
         char type = input.data[0];
-        std::cout << "    [CountOps] Parsed Type: " << (int)type << std::endl;
+        // std::cout << "    [CountOps] Parsed Type: " << (int)type << std::endl;
         input.data++; input.size--;
         
         uint32_t len = 0;
         if (!GetVarint32(&input, &len)) {
-            std::cout << "    [CountOps] ERROR: Failed to decode key varint!" << std::endl;
+            // std::cout << "    [CountOps] ERROR: Failed to decode key varint!" << std::endl;
             break; 
         }
         if (input.size < len) {
-            std::cout << "    [CountOps] ERROR: Key length " << len << " > remaining size " << input.size << std::endl;
+            // std::cout << "    [CountOps] ERROR: Key length " << len << " > remaining size " << input.size << std::endl;
             break;
         }
         
-        std::cout << "    [CountOps] Parsed Key Length: " << len << std::endl;
+        // std::cout << "    [CountOps] Parsed Key Length: " << len << std::endl;
         input.data += len; input.size -= len; 
         
         if (type == kTypeValue) {
             if (!GetVarint32(&input, &len)) {
-                std::cout << "    [CountOps] ERROR: Failed to decode value varint!" << std::endl;
+                // std::cout << "    [CountOps] ERROR: Failed to decode value varint!" << std::endl;
                 break;
             }
             if (input.size < len) {
-                std::cout << "    [CountOps] ERROR: Value length " << len << " > remaining size " << input.size << std::endl;
+                // std::cout << "    [CountOps] ERROR: Value length " << len << " > remaining size " << input.size << std::endl;
                 break;
             }
-            std::cout << "    [CountOps] Parsed Value Length: " << len << std::endl;
+            // std::cout << "    [CountOps] Parsed Value Length: " << len << std::endl;
             input.data += len; input.size -= len;
         }
         count++;
