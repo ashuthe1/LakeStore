@@ -59,67 +59,54 @@ Status DBImpl::Open(const Options& options, const std::string& dbpath, DBImpl** 
 }
 
 Status DBImpl::Recover() {
-    // Phase 1 shortcut: assuming fresh DB, recovery is a no-op unless MANIFEST loaded successfully.
-    // In full impl, you read current_version_'s log_number and replay all WALs >= that number.
+    std::vector<uint64_t> logs = /* List all log files from DB path */;
+    std::sort(logs.begin(), logs.end()); // Replay in order
+
+    SequenceNumber max_seq = 0;
+    for (uint64_t log_num : logs) {
+        std::unique_ptr<WAL> log(new WAL(dbname_ + "/" + std::to_string(log_num) + ".log", log_num));
+        log->Recover([&](const WriteBatch& batch) {
+            DecodeAndInsert(mem_, batch.sequence_number, batch.payload);
+            max_seq = std::max(max_seq, batch.sequence_number + CountOps(&batch) - 1);
+            return Status::OK();
+        });
+    }
+    last_sequence_.store(max_seq);
     return Status::OK();
 }
 
 Status DBImpl::Write(const WriteOptions& opts, WriteBatch* batch) {
+    // 1. Check for background error
+    if (!bg_error_.ok()) return bg_error_;
+
+    // 2. Prepare: Count ops and allocate sequence numbers
+    // (Assume CountOps(batch) is a helper that parses your encoded payload)
+    uint32_t op_count = CountOps(batch); 
+    SequenceNumber base_seq = last_sequence_.fetch_add(op_count) + 1;
+    batch->sequence_number = base_seq;
+
+    // 3. Snapshot the current MemTable
     std::unique_lock<std::mutex> lock(mutex_);
-    while (!bg_error_.ok()) {
-        return bg_error_; 
-    }
-
-    while (imm_ != nullptr) {
-        bg_cv_.wait(lock);
-    }
-
-    SequenceNumber seq = last_sequence_.fetch_add(1, std::memory_order_relaxed) + 1;
-    batch->sequence_number = seq;
-
+    while (imm_ != nullptr) bg_cv_.wait(lock);
+    MemTable* mem_to_insert = mem_;
     lock.unlock();
-    Status s = wal_->Append(batch);
-    if (opts.sync && s.ok()) {
-        s = wal_->Sync();
-    }
-    lock.lock();
 
+    // 4. WAL Append (Group commit)
+    Status s = wal_->Append(batch);
+    if (opts.sync && s.ok()) s = wal_->Sync();
+
+    lock.lock();
     if (!s.ok()) return s;
 
-    // --- ACTUAL MEMTABLE INSERTION LOGIC ---
-    Slice input(batch->payload);
-    while (input.size > 0) {
-        char type = input.data[0];
-        input.data++; input.size--;
-        
-        uint32_t key_len = 0;
-        if (!GetVarint32(&input, &key_len) || input.size < key_len) {
-            return Status::Corruption("Corrupted WriteBatch key");
-        }
-        
-        Slice key(input.data, key_len);
-        input.data += key_len; input.size -= key_len;
-        
-        if (type == kTypeValue) {
-            uint32_t val_len = 0;
-            if (!GetVarint32(&input, &val_len) || input.size < val_len) {
-                return Status::Corruption("Corrupted WriteBatch value");
-            }
-            Slice val(input.data, val_len);
-            input.data += val_len; input.size -= val_len;
-            mem_->Add(seq, kTypeValue, key, val);
-        } else if (type == kTypeDeletion) {
-            mem_->Add(seq, kTypeDeletion, key, Slice());
-        }
-    }
-    // ---------------------------------------
+    // 5. Insert into MemTable (using the snapshot, sequence numbers are correct)
+    DecodeAndInsert(mem_to_insert, base_seq, batch->payload);
 
-    if (mem_->ApproximateMemoryUsage() > 64 * 1024 * 1024) {
+    // 6. Check threshold
+    if (mem_to_insert->ApproximateMemoryUsage() > 64 * 1024 * 1024) {
         imm_ = mem_;
         mem_ = new MemTable();
         MaybeScheduleCompaction();
     }
-
     return Status::OK();
 }
 
@@ -206,14 +193,14 @@ Status DBImpl::Get(const ReadOptions& opts, const Slice& key, std::string* value
 }
 
 void DBImpl::MaybeScheduleCompaction() {
+    // Current threshold: L0 file count >= 4
     if (bg_compaction_scheduled_ || shutting_down_) return;
-    if (imm_ == nullptr) return; // Only schedule if there's an immutable memtable to flush
-
-    bg_compaction_scheduled_ = true;
     
-    // In C++11+, you'd typically manage a persistent thread pool.
-    // For this example, we detach a thread.
-    std::thread([this]() { this->BackgroundCall(); }).detach();
+    // Check files in Version (Step 9)
+    if (imm_ != nullptr || current_version_->Files(0).size() >= 4) {
+        bg_compaction_scheduled_ = true;
+        std::thread([this]() { this->BackgroundCall(); }).detach();
+    }
 }
 
 void DBImpl::BackgroundCall() {
