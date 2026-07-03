@@ -38,6 +38,9 @@ private:
     Status Recover();
     Status RecoverLogFile(uint64_t log_number, SequenceNumber* max_sequence);
 
+    uint32_t CountOps(const WriteBatch* batch);
+    void DecodeAndInsert(MemTable* mem, SequenceNumber seq, const std::string& payload);
+
     // Background tasks
     void MaybeScheduleCompaction();
     void BGWork();

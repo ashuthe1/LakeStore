@@ -3,6 +3,7 @@
 #include "../sstable/sstable_reader.h"
 #include "../util/coding.h"
 #include <iostream>
+#include <filesystem>
 
 namespace lakestore {
 
@@ -29,12 +30,20 @@ DBImpl::~DBImpl() {
 }
 
 Status DBImpl::Open(const Options& options, const std::string& dbpath, DBImpl** dbptr) {
+    std::cout << "DEBUG: Entering Open()" << std::endl;
     *dbptr = nullptr;
     DBImpl* impl = new DBImpl(options, dbpath);
     
     impl->mutex_.lock();
     // 1. Read MANIFEST to restore state (Step 9)
+    std::cout << "DEBUG: Manifest Open()" << std::endl;
     Status s = impl->manifest_->Open();
+    if (!s.ok()) {
+        std::cout << "DEBUG: Manifest Open failed: " << s.ToString() << std::endl;
+        impl->mutex_.unlock();
+        delete impl;
+        return s;
+    }
     // For Phase 1 startup, we assume a fresh DB if open fails/doesn't exist
     
     // 2. Recover WAL files (Step 2)
@@ -59,19 +68,26 @@ Status DBImpl::Open(const Options& options, const std::string& dbpath, DBImpl** 
 }
 
 Status DBImpl::Recover() {
-    std::vector<uint64_t> logs = /* List all log files from DB path */;
-    std::sort(logs.begin(), logs.end()); // Replay in order
+    std::vector<uint64_t> logs;
+    for (const auto& entry : std::filesystem::directory_iterator(dbname_)) {
+        if (entry.path().extension() == ".log") {
+            std::string stem = entry.path().stem().string();
+            logs.push_back(std::stoull(stem));
+        }
+    }
+    std::sort(logs.begin(), logs.end());
 
     SequenceNumber max_seq = 0;
     for (uint64_t log_num : logs) {
         std::unique_ptr<WAL> log(new WAL(dbname_ + "/" + std::to_string(log_num) + ".log", log_num));
         log->Recover([&](const WriteBatch& batch) {
             DecodeAndInsert(mem_, batch.sequence_number, batch.payload);
-            max_seq = std::max(max_seq, batch.sequence_number + CountOps(&batch) - 1);
+            
+            // Cast away constness only for the helper call
+            max_seq = std::max(max_seq, batch.sequence_number + CountOps(const_cast<WriteBatch*>(&batch)) - 1);
             return Status::OK();
         });
     }
-    last_sequence_.store(max_seq);
     return Status::OK();
 }
 
@@ -89,6 +105,11 @@ Status DBImpl::Write(const WriteOptions& opts, WriteBatch* batch) {
     std::unique_lock<std::mutex> lock(mutex_);
     while (imm_ != nullptr) bg_cv_.wait(lock);
     MemTable* mem_to_insert = mem_;
+
+    if (!wal_) {
+        return Status::IOError("WAL not initialized - DB might be closed or corrupted");
+    }
+
     lock.unlock();
 
     // 4. WAL Append (Group commit)
@@ -111,6 +132,8 @@ Status DBImpl::Write(const WriteOptions& opts, WriteBatch* batch) {
 }
 
 Status DBImpl::Put(const WriteOptions& opts, const Slice& key, const Slice& value) {
+    std::cout << "DEBUG: Put() called" << std::endl;
+
     WriteBatch batch;
     // Encode: [Type] [Key Length] [Key] [Value Length] [Value]
     batch.payload.push_back(static_cast<char>(kTypeValue));
@@ -119,6 +142,7 @@ Status DBImpl::Put(const WriteOptions& opts, const Slice& key, const Slice& valu
     PutVarint32(&batch.payload, value.size);
     batch.payload.append(value.data, value.size);
     
+    std::cout << "DEBUG: Calling Write()" << std::endl;
     return Write(opts, &batch);
 }
 
@@ -259,6 +283,53 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit) {
     }
     
     return s;
+}
+
+// In src/db/db_impl.cc
+uint32_t DBImpl::CountOps(const WriteBatch* batch) {
+    uint32_t count = 0;
+    Slice input(batch->payload); // Slice is fine with const payload
+    while (input.size > 0) {
+        char type = input.data[0];
+        input.data++; input.size--;
+        
+        uint32_t len;
+        GetVarint32(&input, &len);
+        input.data += len; input.size -= len; 
+        
+        if (type == kTypeValue) {
+            GetVarint32(&input, &len);
+            input.data += len; input.size -= len;
+        }
+        count++;
+    }
+    return count;
+}
+
+void DBImpl::DecodeAndInsert(MemTable* mem, SequenceNumber seq, const std::string& payload) {
+    Slice input(payload);
+    SequenceNumber current_seq = seq;
+    
+    while (input.size > 0) {
+        char type = input.data[0];
+        input.data++; input.size--;
+        
+        uint32_t key_len;
+        GetVarint32(&input, &key_len);
+        Slice key(input.data, key_len);
+        input.data += key_len; input.size -= key_len;
+        
+        if (type == kTypeValue) {
+            uint32_t val_len;
+            GetVarint32(&input, &val_len);
+            Slice val(input.data, val_len);
+            input.data += val_len; input.size -= val_len;
+            mem->Add(current_seq, kTypeValue, key, val);
+        } else {
+            mem->Add(current_seq, kTypeDeletion, key, Slice());
+        }
+        current_seq++;
+    }
 }
 
 } // namespace lakestore

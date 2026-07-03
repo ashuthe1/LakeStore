@@ -48,8 +48,7 @@ public:
     enum Code { kOk, kNotFound, kIOError, kCorruption };
 
     Status() : code_(kOk) {}
-    Status(Code code, std::string msg) : code_(code), msg_(std::move(msg)) {}
-    
+    Status(Code code, std::string msg) : code_(code), msg_(std::move(msg)) {}    
     static Status OK() { return Status(); }
     static Status NotFound(const std::string& msg) { return Status(kNotFound, msg); }
     static Status IOError(const std::string& msg) { return Status(kIOError, msg); }
