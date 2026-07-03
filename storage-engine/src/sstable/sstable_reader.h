@@ -10,6 +10,7 @@ namespace lakestore {
 struct ReadOptions {
     bool verify_checksums = false;
     bool fill_cache = true;
+    LRUCache* block_cache = nullptr;
 };
 
 class SSTableReader {

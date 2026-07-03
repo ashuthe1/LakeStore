@@ -100,10 +100,29 @@ Status SSTableReader::Get(const ReadOptions& opts, const Slice& key, std::string
         GetVarint32(&handle_val, &block_offset);
         GetVarint32(&handle_val, &block_size);
 
-        // 3. Read the data block (TODO: Step 8 - check BlockCache here instead of direct read)
-        Block* data_block = nullptr;
-        Status s = ReadBlock(block_offset, block_size, &data_block);
-        if (!s.ok()) return s;
+        // 3. Read the data block (using BlockCache if available)
+        std::shared_ptr<Block> data_block;
+        
+        // Extract the file number from the fd_ or store it on the reader.
+        // Assuming we added `uint64_t file_number_` to SSTableReader:
+        uint64_t file_num = file_number_; 
+
+        if (opts.block_cache) {
+            data_block = opts.block_cache->Lookup(file_num, block_offset);
+        }
+
+        if (!data_block) {
+            // Cache miss (or cache disabled), read from disk
+            Block* raw_block = nullptr;
+            Status s = ReadBlock(block_offset, block_size, &raw_block);
+            if (!s.ok()) return s;
+            
+            data_block.reset(raw_block);
+
+            if (opts.block_cache && opts.fill_cache) {
+                opts.block_cache->Insert(file_num, block_offset, data_block, block_size);
+            }
+        }
 
         // 4. Binary search inside the data block
         std::unique_ptr<Block::Iterator> diter(data_block->NewIterator());
@@ -111,10 +130,8 @@ Status SSTableReader::Get(const ReadOptions& opts, const Slice& key, std::string
 
         if (diter->Valid() && diter->key().compare(key) == 0) {
             *value = diter->value().ToString();
-            delete data_block;
             return Status::OK();
         }
-        delete data_block;
     }
 
     return Status::NotFound("Key not found in block");
