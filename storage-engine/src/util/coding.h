@@ -37,15 +37,14 @@ inline bool GetVarint32(Slice* input, uint32_t* value) {
     if (p == nullptr) {
         return false;
     }
+    
+    // Calculate how many bytes the varint took (MUST do this before moving input->data)
+    size_t bytes_read = p - input->data;
+    
+    // Now safely update the Slice
     input->data = p;
-    input->size -= (p - (input->data - input->size)); // Wait, safer math below:
-    // Correct size adjustment:
-    size_t advanced = p - (input->data - input->size); 
-    // Actually, input->data was moved in the macro conceptually. 
-    // Let's do it cleanly:
-    const char* original_data = input->data;
-    input->data = p;
-    input->size -= (p - original_data);
+    input->size -= bytes_read;
+    
     return true;
 }
 }

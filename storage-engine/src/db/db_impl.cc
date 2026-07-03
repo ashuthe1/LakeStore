@@ -92,57 +92,53 @@ Status DBImpl::Recover() {
 }
 
 Status DBImpl::Write(const WriteOptions& opts, WriteBatch* batch) {
-    // 1. Check for background error
+    std::cout << "  [Write] Entered Write()" << std::endl;
     if (!bg_error_.ok()) return bg_error_;
+    if (!wal_) return Status::IOError("WAL not initialized - DB might be corrupted");
 
-    // 2. Prepare: Count ops and allocate sequence numbers
-    // (Assume CountOps(batch) is a helper that parses your encoded payload)
-    uint32_t op_count = CountOps(batch); 
+    uint32_t op_count = CountOps(batch);
+    std::cout << "  [Write] CountOps found " << op_count << " operations" << std::endl;
+
     SequenceNumber base_seq = last_sequence_.fetch_add(op_count) + 1;
     batch->sequence_number = base_seq;
 
-    // 3. Snapshot the current MemTable
     std::unique_lock<std::mutex> lock(mutex_);
     while (imm_ != nullptr) bg_cv_.wait(lock);
     MemTable* mem_to_insert = mem_;
-
-    if (!wal_) {
-        return Status::IOError("WAL not initialized - DB might be closed or corrupted");
-    }
-
     lock.unlock();
 
-    // 4. WAL Append (Group commit)
+    std::cout << "  [Write] Calling WAL Append..." << std::endl;
     Status s = wal_->Append(batch);
     if (opts.sync && s.ok()) s = wal_->Sync();
 
     lock.lock();
-    if (!s.ok()) return s;
+    if (!s.ok()) {
+        std::cout << "  [Write] WAL Append failed!" << std::endl;
+        return s;
+    }
 
-    // 5. Insert into MemTable (using the snapshot, sequence numbers are correct)
+    std::cout << "  [Write] Calling DecodeAndInsert..." << std::endl;
     DecodeAndInsert(mem_to_insert, base_seq, batch->payload);
+    std::cout << "  [Write] MemTable insertion complete." << std::endl;
 
-    // 6. Check threshold
     if (mem_to_insert->ApproximateMemoryUsage() > 64 * 1024 * 1024) {
         imm_ = mem_;
         mem_ = new MemTable();
         MaybeScheduleCompaction();
     }
+    
     return Status::OK();
 }
 
 Status DBImpl::Put(const WriteOptions& opts, const Slice& key, const Slice& value) {
-    std::cout << "DEBUG: Put() called" << std::endl;
-
     WriteBatch batch;
-    // Encode: [Type] [Key Length] [Key] [Value Length] [Value]
     batch.payload.push_back(static_cast<char>(kTypeValue));
     PutVarint32(&batch.payload, key.size);
     batch.payload.append(key.data, key.size);
     PutVarint32(&batch.payload, value.size);
     batch.payload.append(value.data, value.size);
     
-    std::cout << "DEBUG: Calling Write()" << std::endl;
+    std::cout << "  [Put] Constructed payload of size: " << batch.payload.size() << std::endl;
     return Write(opts, &batch);
 }
 
@@ -285,20 +281,44 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit) {
     return s;
 }
 
-// In src/db/db_impl.cc
 uint32_t DBImpl::CountOps(const WriteBatch* batch) {
     uint32_t count = 0;
-    Slice input(batch->payload); // Slice is fine with const payload
+    Slice input(batch->payload);
+    
+    std::cout << "    [CountOps] Input size: " << input.size << " | Bytes: ";
+    for(size_t i = 0; i < input.size; i++) {
+        printf("%02x ", (unsigned char)input.data[i]);
+    }
+    std::cout << std::endl;
+
     while (input.size > 0) {
         char type = input.data[0];
+        std::cout << "    [CountOps] Parsed Type: " << (int)type << std::endl;
         input.data++; input.size--;
         
-        uint32_t len;
-        GetVarint32(&input, &len);
+        uint32_t len = 0;
+        if (!GetVarint32(&input, &len)) {
+            std::cout << "    [CountOps] ERROR: Failed to decode key varint!" << std::endl;
+            break; 
+        }
+        if (input.size < len) {
+            std::cout << "    [CountOps] ERROR: Key length " << len << " > remaining size " << input.size << std::endl;
+            break;
+        }
+        
+        std::cout << "    [CountOps] Parsed Key Length: " << len << std::endl;
         input.data += len; input.size -= len; 
         
         if (type == kTypeValue) {
-            GetVarint32(&input, &len);
+            if (!GetVarint32(&input, &len)) {
+                std::cout << "    [CountOps] ERROR: Failed to decode value varint!" << std::endl;
+                break;
+            }
+            if (input.size < len) {
+                std::cout << "    [CountOps] ERROR: Value length " << len << " > remaining size " << input.size << std::endl;
+                break;
+            }
+            std::cout << "    [CountOps] Parsed Value Length: " << len << std::endl;
             input.data += len; input.size -= len;
         }
         count++;
@@ -314,16 +334,19 @@ void DBImpl::DecodeAndInsert(MemTable* mem, SequenceNumber seq, const std::strin
         char type = input.data[0];
         input.data++; input.size--;
         
-        uint32_t key_len;
-        GetVarint32(&input, &key_len);
+        uint32_t key_len = 0;
+        // Strict bounds checking
+        if (!GetVarint32(&input, &key_len) || input.size < key_len) break;
+        
         Slice key(input.data, key_len);
         input.data += key_len; input.size -= key_len;
         
         if (type == kTypeValue) {
-            uint32_t val_len;
-            GetVarint32(&input, &val_len);
+            uint32_t val_len = 0;
+            if (!GetVarint32(&input, &val_len) || input.size < val_len) break;
             Slice val(input.data, val_len);
             input.data += val_len; input.size -= val_len;
+            
             mem->Add(current_seq, kTypeValue, key, val);
         } else {
             mem->Add(current_seq, kTypeDeletion, key, Slice());

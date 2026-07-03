@@ -38,11 +38,13 @@ private:
         size_t size = sizeof(Node) + sizeof(std::atomic<Node*>) * (height - 1);
         void* mem = std::malloc(size);
         
-        // Safely invoke the constructor using placement new
         Node* node = new (mem) Node(key, value);
         
-        // Safely initialize the atomic pointers in the raw memory
-        for (int i = 0; i < height; i++) {
+        // Node constructor already initialized next[0], just set it to null safely.
+        node->next[0].store(nullptr, std::memory_order_relaxed);
+        
+        // Initialize the dynamically allocated remaining pointers
+        for (int i = 1; i < height; i++) {
             new (&node->next[i]) std::atomic<Node*>(nullptr);
         }
         return node;
