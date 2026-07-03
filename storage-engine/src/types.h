@@ -27,6 +27,19 @@ struct Slice {
     Slice(const char* s) : data(s), size(strlen(s)) {}
 
     std::string ToString() const { return std::string(data, size); }
+
+    int compare(const Slice& b) const {
+        const size_t min_len = (size < b.size) ? size : b.size;
+        int r = std::memcmp(data, b.data, min_len);
+        if (r == 0) {
+            if (size < b.size) r = -1;
+            else if (size > b.size) r = +1;
+        }
+        return r;
+    }
+
+    bool operator==(const Slice& b) const { return compare(b) == 0; }
+    bool operator!=(const Slice& b) const { return compare(b) != 0; }
 };
 
 // Status returned by every operation.
