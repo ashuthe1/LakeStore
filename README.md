@@ -64,13 +64,4 @@ If the system crashes (or restarts normally):
 ---
 
 ## 3. Current Benchmarks
-
-Below are the most recent benchmark results. 
-
-Sequential Writes (~180k/s): High throughput achieved via sequential WAL appending.
-
-Random Writes (~149k/s): Extremely close to sequential performance, proving that the SkipList O(log N) insertion overhead is heavily minimized by placement-new memory layouts and cache locality.
-
-Random Reads (~451k/s): The O(log N) lock-free read path is highly optimized. Because reads do not acquire the main state mutex, they scale exceptionally well across multiple cores.
-
-*Note: The warning indicates this run was executed against a **DEBUG** build (`-O0`). In a full `Release` build (`-O3`), performance typically scales 3x to 5x higher, bypassing the 1M ops/sec mark for reads. Even in unoptimized debug mode, the lock-free SkipList architecture delivers massive throughput.*
+<img width="1210" height="321" alt="LakeStore-benchmark" src="https://github.com/user-attachments/assets/6fcbbbfa-0959-4d7f-8a9c-f8236b9cd047" />
