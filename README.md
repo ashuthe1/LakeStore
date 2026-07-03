@@ -65,3 +65,29 @@ If the system crashes (or restarts normally):
 
 ## 3. Current Benchmarks
 <img width="1210" height="321" alt="LakeStore-benchmark" src="https://github.com/user-attachments/assets/6fcbbbfa-0959-4d7f-8a9c-f8236b9cd047" />
+
+
+--
+
+## 4. Executing/testing:
+
+```sh
+mkdir -p build
+cd build
+
+# Configure the project for maximum performance (Release mode)
+cmake -DCMAKE_BUILD_TYPE=Release ..
+
+# Compile on macOS:
+make -j$(sysctl -n hw.ncpu)
+
+# OR Compile on Linux:
+make -j$(nproc)
+
+./lakestore_main
+
+./lakestore_test
+
+./lakestore_bench
+
+```

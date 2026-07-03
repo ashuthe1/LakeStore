@@ -18,7 +18,7 @@ FetchContent_Declare(
 set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googlebenchmark)
 
-# --- Fetch Google Test ---
+# 2. Fetch Google Test
 FetchContent_Declare(
   googletest
   GIT_REPOSITORY https://github.com/google/googletest.git
@@ -27,11 +27,7 @@ FetchContent_Declare(
 set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-# --- Define the Unit Test Executable ---
-add_executable(lakestore_test tests/db_test.cc)
-target_link_libraries(lakestore_test PRIVATE lakestore_lib gtest_main)
-
-# 2. Define the core Lakestore Library
+# 3. Define the core Lakestore Library (MUST BE BEFORE EXECUTABLES)
 set(LAKESTORE_SOURCES
     src/types.cc
     src/wal/wal.cc
@@ -44,6 +40,7 @@ set(LAKESTORE_SOURCES
     src/db/manifest.cc
     src/db/compaction.cc
     src/db/db_impl.cc
+    src/c_api/c_api.cc  # <--- ADDED C-API HERE
 )
 
 add_library(lakestore_lib STATIC ${LAKESTORE_SOURCES})
@@ -52,10 +49,14 @@ target_include_directories(lakestore_lib PUBLIC src)
 find_package(Threads REQUIRED)
 target_link_libraries(lakestore_lib Threads::Threads)
 
-# 3. Define the Benchmark Executable
+# 4. Define the Unit Test Executable
+add_executable(lakestore_test tests/db_test.cc)
+target_link_libraries(lakestore_test PRIVATE lakestore_lib gtest_main)
+
+# 5. Define the Benchmark Executable
 add_executable(lakestore_bench bench/bench.cc)
 target_link_libraries(lakestore_bench PRIVATE lakestore_lib benchmark::benchmark)
 
-# 4. Define the Simple Playground Executable
+# 6. Define the Simple Playground Executable
 add_executable(lakestore_main src/main.cc)
 target_link_libraries(lakestore_main PRIVATE lakestore_lib)
