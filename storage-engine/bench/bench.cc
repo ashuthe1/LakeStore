@@ -1,113 +1,127 @@
 #include <benchmark/benchmark.h>
+#include <filesystem>
+#include <chrono>
+#include <vector>
+#include <algorithm>
 #include "db/db_impl.h"
 #include "options.h"
-#include <string>
-#include <filesystem>
-#include <random>
 
 using namespace lakestore;
 
-// Helper to generate a zero-padded string key (e.g., "key_0000152")
-std::string MakeKey(int i) {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "key_%07d", i);
-    return std::string(buf);
-}
-
-// Helper to create a fresh DB directory for a benchmark
-std::string SetupDB(const std::string& name, DBImpl** db) {
-    std::string path = "/tmp/lakestore_bench_" + name;
+// Helper to set up a fresh database for each benchmark
+DBImpl* SetupFreshDB(const std::string& path) {
     std::filesystem::remove_all(path);
     std::filesystem::create_directories(path);
-    
     Options opts;
-    opts.block_size = 4096;
-    opts.bloom_bits_per_key = 10;
-    
-    Status s = DBImpl::Open(opts, path, db);
-    if (!s.ok()) {
-        throw std::runtime_error("Failed to open DB: " + s.ToString());
-    }
-    return path;
+    DBImpl* db = nullptr;
+    DBImpl::Open(opts, path, &db);
+    return db;
 }
 
-// --- Benchmark 1: Sequential Writes ---
-static void BM_SequentialWrite(benchmark::State& state) {
-    DBImpl* db = nullptr;
-    std::string path = SetupDB("seq_write", &db);
+// ---------------------------------------------------------
+// Benchmark 1: Normal Async Writes (WAL + OS Buffer)
+// ---------------------------------------------------------
+static void BM_Write_AsyncWAL(benchmark::State& state) {
+    DBImpl* db = SetupFreshDB("/tmp/lakestore_bench_async");
     WriteOptions wopts;
-    wopts.sync = false; // standard async WAL writes
-    
-    std::string value(100, 'x'); // 100 byte payload
+    wopts.sync = false;
+    wopts.disable_wal = false;
+
     int i = 0;
-    
     for (auto _ : state) {
-        db->Put(wopts, MakeKey(i++), value);
+        std::string key = "key_" + std::to_string(i);
+        db->Put(wopts, key, "value_payload");
+        i++;
     }
-    
-    state.SetBytesProcessed(state.iterations() * (15 + 100)); // key + value size
+    state.SetBytesProcessed(state.iterations() * 25);
     state.SetItemsProcessed(state.iterations());
-    
     delete db;
-    std::filesystem::remove_all(path);
 }
-BENCHMARK(BM_SequentialWrite);
 
-// --- Benchmark 2: Random Writes ---
-static void BM_RandomWrite(benchmark::State& state) {
-    DBImpl* db = nullptr;
-    std::string path = SetupDB("rand_write", &db);
+// ---------------------------------------------------------
+// Benchmark 2: Strict Sync Writes (WAL + Physical Disk Flush)
+// ---------------------------------------------------------
+static void BM_Write_SyncWAL(benchmark::State& state) {
+    DBImpl* db = SetupFreshDB("/tmp/lakestore_bench_sync");
     WriteOptions wopts;
-    
-    std::string value(100, 'x');
-    
-    // Fast RNG
-    std::mt19937 gen(42);
-    std::uniform_int_distribution<> dist(0, 1000000);
-    
+    wopts.sync = true; // Forces disk physical write
+    wopts.disable_wal = false;
+
+    int i = 0;
     for (auto _ : state) {
-        db->Put(wopts, MakeKey(dist(gen)), value);
+        std::string key = "key_" + std::to_string(i);
+        db->Put(wopts, key, "value_payload");
+        i++;
     }
-    
-    state.SetBytesProcessed(state.iterations() * (15 + 100));
     state.SetItemsProcessed(state.iterations());
-    
     delete db;
-    std::filesystem::remove_all(path);
 }
-BENCHMARK(BM_RandomWrite);
 
-// --- Benchmark 3: Random Reads (Warm Cache) ---
-static void BM_RandomRead(benchmark::State& state) {
-    DBImpl* db = nullptr;
-    std::string path = SetupDB("rand_read", &db);
-    
-    // Pre-populate the DB with 100,000 keys
+// ---------------------------------------------------------
+// Benchmark 3: In-Memory Only (Bypass WAL - Target: ~800k/s)
+// ---------------------------------------------------------
+static void BM_Write_InMemoryOnly(benchmark::State& state) {
+    DBImpl* db = SetupFreshDB("/tmp/lakestore_bench_mem");
     WriteOptions wopts;
-    std::string value(100, 'x');
-    const int kNumKeys = 100000;
-    
-    for (int i = 0; i < kNumKeys; i++) {
-        db->Put(wopts, MakeKey(i), value);
+    wopts.disable_wal = true; // Pure SkipList speed
+
+    int i = 0;
+    for (auto _ : state) {
+        std::string key = "key_" + std::to_string(i);
+        db->Put(wopts, key, "value_payload");
+        i++;
     }
-    
+    state.SetBytesProcessed(state.iterations() * 25);
+    state.SetItemsProcessed(state.iterations());
+    delete db;
+}
+
+// ---------------------------------------------------------
+// Benchmark 4: Random Reads + p99 Latency (Target: < 1ms)
+// ---------------------------------------------------------
+static void BM_Read_p99(benchmark::State& state) {
+    DBImpl* db = SetupFreshDB("/tmp/lakestore_bench_read");
+    WriteOptions wopts;
+    wopts.disable_wal = true; // Fast setup
     ReadOptions ropts;
-    std::string out_value;
-    
-    std::mt19937 gen(42);
-    std::uniform_int_distribution<> dist(0, kNumKeys - 1);
-    
-    for (auto _ : state) {
-        Status s = db->Get(ropts, MakeKey(dist(gen)), &out_value);
-        benchmark::DoNotOptimize(s);
-        benchmark::DoNotOptimize(out_value);
+
+    // Populate data
+    for (int i = 0; i < 100000; ++i) {
+        db->Put(wopts, "key_" + std::to_string(i), "value_payload");
     }
-    
+
+    std::vector<double> latencies;
+    latencies.reserve(state.max_iterations);
+
+    for (auto _ : state) {
+        int random_id = rand() % 100000;
+        std::string key = "key_" + std::to_string(random_id);
+        std::string value;
+
+        auto start = std::chrono::high_resolution_clock::now();
+        db->Get(ropts, key, &value);
+        auto end = std::chrono::high_resolution_clock::now();
+
+        double elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+        latencies.push_back(elapsed_ns);
+    }
+
+    std::sort(latencies.begin(), latencies.end());
+    double p99_ns = 0;
+    if (!latencies.empty()) {
+        size_t p99_index = static_cast<size_t>(latencies.size() * 0.99);
+        p99_ns = latencies[p99_index];
+    }
+
+    state.counters["p99_latency_ms"] = p99_ns / 1000000.0;
     state.SetItemsProcessed(state.iterations());
-    
     delete db;
-    std::filesystem::remove_all(path);
 }
-BENCHMARK(BM_RandomRead);
+
+// Register the benchmarks
+BENCHMARK(BM_Write_AsyncWAL);
+BENCHMARK(BM_Write_SyncWAL);
+BENCHMARK(BM_Write_InMemoryOnly);
+BENCHMARK(BM_Read_p99);
 
 BENCHMARK_MAIN();

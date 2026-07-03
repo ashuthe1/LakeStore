@@ -108,7 +108,12 @@ Status DBImpl::Write(const WriteOptions& opts, WriteBatch* batch) {
 
     // 2. Serialized WAL Append
     Status s = wal_->Append(batch);
-    if (opts.sync && s.ok()) s = wal_->Sync();
+    
+    // Only touch the WAL if it is NOT disabled
+    if (!opts.disable_wal) {
+        s = wal_->Append(batch);
+        if (opts.sync && s.ok()) s = wal_->Sync();
+    }
 
     if (!s.ok()) {
         return s;

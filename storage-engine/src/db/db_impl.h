@@ -16,6 +16,7 @@ namespace lakestore {
 
 struct WriteOptions {
     bool sync = false; // If true, fsync the WAL before returning
+    bool disable_wal = false; // will use this for running some benchmarks
 };
 
 class DBImpl {
