@@ -26,35 +26,34 @@ DBImpl::~DBImpl() {
     }
 
     delete mem_;
-    delete imm_;
+    if (imm_ != nullptr) delete imm_;
 }
 
 Status DBImpl::Open(const Options& options, const std::string& dbpath, DBImpl** dbptr) {
-    // std::cout << "DEBUG: Entering Open()" << std::endl;
     *dbptr = nullptr;
     DBImpl* impl = new DBImpl(options, dbpath);
     
     impl->mutex_.lock();
-    // 1. Read MANIFEST to restore state (Step 9)
-    // std::cout << "DEBUG: Manifest Open()" << std::endl;
+    
+    // 1. Read MANIFEST
     Status s = impl->manifest_->Open();
     if (!s.ok()) {
-        // std::cout << "DEBUG: Manifest Open failed: " << s.ToString() << std::endl;
         impl->mutex_.unlock();
         delete impl;
         return s;
     }
-    // For Phase 1 startup, we assume a fresh DB if open fails/doesn't exist
     
-    // 2. Recover WAL files (Step 2)
+    // 2. CRITICAL FIX: Allocate MemTable BEFORE recovery!
+    impl->mem_ = new MemTable();
+    
+    // 3. Recover WAL files into the MemTable
     s = impl->Recover();
     
-    // 3. Setup active MemTable and WAL
+    // 4. Setup the active WAL for new incoming writes
     if (s.ok()) {
         impl->log_file_number_ = impl->manifest_->NextFileNumber();
         std::string wal_name = impl->dbname_ + "/" + std::to_string(impl->log_file_number_) + ".log";
         impl->wal_ = std::make_unique<WAL>(wal_name, impl->log_file_number_);
-        impl->mem_ = new MemTable();
     }
     
     impl->mutex_.unlock();
