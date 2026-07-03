@@ -45,9 +45,15 @@ WAL::~WAL() {
 }
 
 Status WAL::Sync() {
-    if (::fdatasync(fd_) != 0) {
-        return Status::IOError("fdatasync failed");
+    #ifdef __APPLE__
+    if (::fsync(fd_) != 0) {
+        return Status::IOError("Failed to fsync WAL");
     }
+    #else
+        if (::fdatasync(fd_) != 0) {
+            return Status::IOError("Failed to fdatasync WAL");
+        }
+    #endif
     return Status::OK();
 }
 
