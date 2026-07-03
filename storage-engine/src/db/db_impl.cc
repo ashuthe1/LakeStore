@@ -1,6 +1,7 @@
 #include "db_impl.h"
 #include "../sstable/sstable_writer.h"
 #include "../sstable/sstable_reader.h"
+#include "../util/coding.h"
 #include <iostream>
 
 namespace lakestore {
@@ -64,22 +65,18 @@ Status DBImpl::Recover() {
 }
 
 Status DBImpl::Write(const WriteOptions& opts, WriteBatch* batch) {
-    // 1. Check background errors and backpressure
     std::unique_lock<std::mutex> lock(mutex_);
     while (!bg_error_.ok()) {
-        return bg_error_; // DB is broken until restarted
+        return bg_error_; 
     }
 
-    // Wait if immutable memtable is still flushing
     while (imm_ != nullptr) {
         bg_cv_.wait(lock);
     }
 
-    // 2. Assign sequence numbers
     SequenceNumber seq = last_sequence_.fetch_add(1, std::memory_order_relaxed) + 1;
     batch->sequence_number = seq;
 
-    // 3. WAL Write (Drop lock for group commit I/O)
     lock.unlock();
     Status s = wal_->Append(batch);
     if (opts.sync && s.ok()) {
@@ -89,13 +86,29 @@ Status DBImpl::Write(const WriteOptions& opts, WriteBatch* batch) {
 
     if (!s.ok()) return s;
 
-    // 4. MemTable Insert (Holding lock)
-    // Extract actual operations from batch payload (pseudo-code for parsing)
-    // In reality, you'd iterate through the WriteBatch payload encoding here.
-    // Assuming batch contains a single Put for this example:
-    // mem_->Add(seq, kTypeValue, key, value);
+    // --- ACTUAL MEMTABLE INSERTION LOGIC ---
+    Slice input(batch->payload);
+    while (input.size > 0) {
+        char type = input.data[0];
+        input.data++; input.size--;
+        
+        uint32_t key_len = 0;
+        GetVarint32(&input, &key_len);
+        Slice key(input.data, key_len);
+        input.data += key_len; input.size -= key_len;
+        
+        if (type == kTypeValue) {
+            uint32_t val_len = 0;
+            GetVarint32(&input, &val_len);
+            Slice val(input.data, val_len);
+            input.data += val_len; input.size -= val_len;
+            mem_->Add(seq, kTypeValue, key, val);
+        } else if (type == kTypeDeletion) {
+            mem_->Add(seq, kTypeDeletion, key, Slice());
+        }
+    }
+    // ---------------------------------------
 
-    // 5. Check if MemTable is full (e.g., > 64MB)
     if (mem_->ApproximateMemoryUsage() > 64 * 1024 * 1024) {
         imm_ = mem_;
         mem_ = new MemTable();
@@ -106,13 +119,24 @@ Status DBImpl::Write(const WriteOptions& opts, WriteBatch* batch) {
 }
 
 Status DBImpl::Put(const WriteOptions& opts, const Slice& key, const Slice& value) {
-    WriteBatch batch; // Create an encoded Put operation
-    // (Implementation of WriteBatch building omitted for brevity, maps to Step 2 binary format)
+    WriteBatch batch;
+    // Encode: [Type] [Key Length] [Key] [Value Length] [Value]
+    batch.payload.push_back(static_cast<char>(kTypeValue));
+    PutVarint32(&batch.payload, key.size);
+    batch.payload.append(key.data, key.size);
+    PutVarint32(&batch.payload, value.size);
+    batch.payload.append(value.data, value.size);
+    
     return Write(opts, &batch);
 }
 
 Status DBImpl::Delete(const WriteOptions& opts, const Slice& key) {
-    WriteBatch batch; // Create an encoded Delete operation (kTypeDeletion)
+    WriteBatch batch;
+    // Encode: [Type] [Key Length] [Key]
+    batch.payload.push_back(static_cast<char>(kTypeDeletion));
+    PutVarint32(&batch.payload, key.size);
+    batch.payload.append(key.data, key.size);
+    
     return Write(opts, &batch);
 }
 
