@@ -136,14 +136,13 @@ Status WAL::Append(WriteBatch* batch) {
     // Unlock during expensive I/O operations so other threads can queue up
     lock.unlock();
 
-    Status s = Status::OK();
+   Status s = Status::OK();
     if (!buffer.empty()) {
         ssize_t written = ::write(fd_, buffer.data(), buffer.size());
         if (written != static_cast<ssize_t>(buffer.size())) {
             s = Status::IOError("Incomplete write to WAL");
-        } else if (::fdatasync(fd_) != 0) { // Nothing is acked until fdatasync returns
-            s = Status::IOError("Failed to fdatasync WAL");
-        }
+        } 
+        // DBImpl::Write will now handle it via wal_->Sync() when opts.sync == true.
     }
 
     // Re-acquire lock to update followers and remove from queue
