@@ -16,16 +16,15 @@ private:
     struct Node {
         InternalKey key;
         std::string value;
-        // Flexible array of atomic pointers. 
-        // We allocate memory for this array dynamically based on the node's height.
         std::atomic<Node*> next[1]; 
         
-        // Helper to load pointer with acquire semantics for lock-free reads
+        // Explicit constructor prevents aggregate initialization memory corruption
+        Node(const InternalKey& k, const std::string& v) : key(k), value(v) {}
+
         Node* Next(int level) {
             return next[level].load(std::memory_order_acquire);
         }
 
-        // Helper to store pointer with release semantics for safe publishing
         void SetNext(int level, Node* x) {
             next[level].store(x, std::memory_order_release);
         }
@@ -38,9 +37,12 @@ private:
     Node* AllocateNode(const InternalKey& key, const std::string& value, int height) {
         size_t size = sizeof(Node) + sizeof(std::atomic<Node*>) * (height - 1);
         void* mem = std::malloc(size);
-        Node* node = new (mem) Node{key, value};
+        
+        // Safely invoke the constructor using placement new
+        Node* node = new (mem) Node(key, value);
+        
+        // Safely initialize the atomic pointers in the raw memory
         for (int i = 0; i < height; i++) {
-            // Placement new for the atomics to ensure they are initialized
             new (&node->next[i]) std::atomic<Node*>(nullptr);
         }
         return node;

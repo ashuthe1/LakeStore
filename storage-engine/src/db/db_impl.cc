@@ -93,13 +93,18 @@ Status DBImpl::Write(const WriteOptions& opts, WriteBatch* batch) {
         input.data++; input.size--;
         
         uint32_t key_len = 0;
-        GetVarint32(&input, &key_len);
+        if (!GetVarint32(&input, &key_len) || input.size < key_len) {
+            return Status::Corruption("Corrupted WriteBatch key");
+        }
+        
         Slice key(input.data, key_len);
         input.data += key_len; input.size -= key_len;
         
         if (type == kTypeValue) {
             uint32_t val_len = 0;
-            GetVarint32(&input, &val_len);
+            if (!GetVarint32(&input, &val_len) || input.size < val_len) {
+                return Status::Corruption("Corrupted WriteBatch value");
+            }
             Slice val(input.data, val_len);
             input.data += val_len; input.size -= val_len;
             mem_->Add(seq, kTypeValue, key, val);
