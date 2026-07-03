@@ -10,7 +10,7 @@ using namespace lakestore;
 
 class DBTest : public ::testing::Test {
 protected:
-    std::string db_path = "/tmp/lakestore_comprehensive_tests";
+    std::string db_path = "./lakestore_test_data";
     DBImpl* db = nullptr;
     Options opts;
     WriteOptions wopts;
