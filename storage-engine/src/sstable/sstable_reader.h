@@ -1,4 +1,5 @@
 #pragma once
+
 #include "../types.h"
 #include "block.h"
 #include "bloom_filter.h"
@@ -7,10 +8,12 @@
 
 namespace lakestore {
 
+class LRUCache; // Forward declaration so we don't need to include the full cache header
+
 struct ReadOptions {
     bool verify_checksums = false;
     bool fill_cache = true;
-    LRUCache* block_cache = nullptr;
+    LRUCache* block_cache = nullptr; 
 };
 
 class SSTableReader {
@@ -18,9 +21,7 @@ public:
     static Status Open(const std::string& filename, SSTableReader** reader);
     ~SSTableReader();
 
-    // Point query
     Status Get(const ReadOptions& opts, const Slice& key, std::string* value);
-    
     uint64_t FileSize() const { return file_size_; }
 
 private:
@@ -30,8 +31,8 @@ private:
 
     int fd_ = -1;
     uint64_t file_size_ = 0;
+    uint64_t file_number_ = 0; // Added for cache identification
     
-    // Always in memory
     Block* index_block_ = nullptr;
     std::string filter_data_;
 };

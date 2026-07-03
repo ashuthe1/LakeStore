@@ -85,6 +85,14 @@ struct InternalKey {
     static InternalKey Decode(const Slice& s);
 };
 
+inline int CompareInternalKeys(const InternalKey& a, const InternalKey& b) {
+    int r = a.user_key.compare(b.user_key);
+    if (r != 0) return r;
+    if (a.seq > b.seq) return -1;
+    if (a.seq < b.seq) return 1;
+    return 0;
+}
+
 // Minimal WriteBatch struct to support WAL group commit interface.
 struct WriteBatch {
     SequenceNumber sequence_number = 0;

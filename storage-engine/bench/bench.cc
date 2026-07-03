@@ -1,6 +1,6 @@
 #include <benchmark/benchmark.h>
-#include "src/db/db_impl.h"
-#include "src/options.h"
+#include "db/db_impl.h"
+#include "options.h"
 #include <string>
 #include <filesystem>
 #include <random>

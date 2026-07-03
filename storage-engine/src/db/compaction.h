@@ -2,6 +2,7 @@
 #include "manifest.h"
 #include "../options.h"
 #include "../sstable/sstable_writer.h"
+#include "../iterator.h"
 #include <vector>
 #include <memory>
 

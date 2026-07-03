@@ -1,5 +1,7 @@
 #pragma once
+
 #include "../types.h"
+#include "../iterator.h" // MUST INCLUDE THIS
 #include <vector>
 #include <string>
 
@@ -7,17 +9,14 @@ namespace lakestore {
 
 class Block {
 public:
-    // Takes ownership of the dynamically allocated buffer
     explicit Block(const char* data, size_t size);
     ~Block();
-
-    // Prevent copying
     Block(const Block&) = delete;
     Block& operator=(const Block&) = delete;
 
     size_t size() const { return size_; }
 
-    class Iterator : public lakestore::Iterator { // Inherit here!
+    class Iterator : public lakestore::Iterator { 
     public:
         Iterator(const char* data, uint32_t restarts, uint32_t num_restarts);
         ~Iterator() override = default;
@@ -36,17 +35,17 @@ public:
         void ParseNextKey();
 
         const char* data_;
-        uint32_t restarts_;     // Offset in data_ where restart array begins
+        uint32_t restarts_;
         uint32_t num_restarts_;
         
-        uint32_t current_;      // Current offset in data_
-        uint32_t restart_index_;// Current restart block index
+        uint32_t current_;
+        uint32_t restart_index_;
         
-        std::string key_;       // Reconstructed key
-        Slice value_;           // Pointer to value in data_
+        std::string key_;
+        Slice value_;
     };
 
-    lakestore::Iterator* NewIterator() const; // Update return type
+    lakestore::Iterator* NewIterator() const;
 
 private:
     const char* data_;

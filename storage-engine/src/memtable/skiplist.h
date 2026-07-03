@@ -9,17 +9,6 @@
 
 namespace lakestore {
 
-// Comparator for the SkipList:
-// 1. user_key ASCENDING
-// 2. sequence_number DESCENDING (so newer versions come first)
-inline int CompareInternalKeys(const InternalKey& a, const InternalKey& b) {
-    int r = a.user_key.compare(b.user_key);
-    if (r != 0) return r;
-    if (a.seq > b.seq) return -1;
-    if (a.seq < b.seq) return 1;
-    return 0;
-}
-
 class SkipList {
 private:
     static constexpr int kMaxHeight = 12;

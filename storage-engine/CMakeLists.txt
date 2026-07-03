@@ -42,3 +42,7 @@ target_link_libraries(lakestore_lib Threads::Threads)
 # 3. Define the Benchmark Executable
 add_executable(lakestore_bench bench/bench.cc)
 target_link_libraries(lakestore_bench PRIVATE lakestore_lib benchmark::benchmark)
+
+# 4. Define the Simple Playground Executable
+add_executable(lakestore_main src/main.cc)
+target_link_libraries(lakestore_main PRIVATE lakestore_lib)

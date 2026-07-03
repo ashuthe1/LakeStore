@@ -5,6 +5,7 @@
 #include "../wal/wal.h"
 #include "../memtable/memtable.h"
 #include "../cache/lru_cache.h"
+#include "../sstable/sstable_reader.h"
 #include "manifest.h"
 #include <mutex>
 #include <condition_variable>

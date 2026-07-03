@@ -1,8 +1,10 @@
 #include "sstable_reader.h"
 #include "../util/coding.h"
+#include "../cache/lru_cache.h"
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <memory>
 
 namespace lakestore {
 
@@ -29,16 +31,14 @@ Status SSTableReader::Open(const std::string& filename, SSTableReader** reader) 
     ::fstat(fd, &st);
     uint64_t size = st.st_size;
 
-    if (size < 48) { // Footer size
+    if (size < 48) { 
         ::close(fd);
-        return Status::Corruption("File too short to be an SSTable");
+        return Status::Corruption("File too short");
     }
 
-    // Read footer
     char footer_buf[48];
     ::pread(fd, footer_buf, 48, size - 48);
     
-    // Verify magic number (0xdb4775248b80fb57)
     uint64_t magic;
     std::memcpy(&magic, footer_buf + 40, 8);
     if (magic != 0xdb4775248b80fb57ULL) {
@@ -56,15 +56,16 @@ Status SSTableReader::Open(const std::string& filename, SSTableReader** reader) 
     SSTableReader* r = new SSTableReader();
     r->fd_ = fd;
     r->file_size_ = size;
+    // For Phase 1 simple test, default file_number to 0. 
+    // In a real system, you'd extract this from the filename string.
+    r->file_number_ = 0; 
 
-    // Load Index Block
     Status s = r->ReadBlock(index_offset, index_size, &r->index_block_);
     if (!s.ok()) {
         delete r;
         return s;
     }
 
-    // Load Filter Block
     if (filter_size > 0) {
         char* fbuf = new char[filter_size];
         ::pread(fd, fbuf, filter_size, filter_offset);
@@ -82,7 +83,6 @@ SSTableReader::~SSTableReader() {
 }
 
 Status SSTableReader::Get(const ReadOptions& opts, const Slice& key, std::string* value) {
-    // 1. Check Bloom Filter First (Skip disk I/O if possible)
     if (!filter_data_.empty()) {
         InternalKey ik = InternalKey::Decode(key);
         if (!BloomFilter::MayContain(filter_data_, ik.user_key)) {
@@ -90,8 +90,7 @@ Status SSTableReader::Get(const ReadOptions& opts, const Slice& key, std::string
         }
     }
 
-    // 2. Binary search the index block to find the correct data block handle
-    std::unique_ptr<Block::Iterator> iiter(index_block_->NewIterator());
+    std::unique_ptr<lakestore::Iterator> iiter(index_block_->NewIterator());
     iiter->Seek(key);
     
     if (iiter->Valid()) {
@@ -100,11 +99,7 @@ Status SSTableReader::Get(const ReadOptions& opts, const Slice& key, std::string
         GetVarint32(&handle_val, &block_offset);
         GetVarint32(&handle_val, &block_size);
 
-        // 3. Read the data block (using BlockCache if available)
         std::shared_ptr<Block> data_block;
-        
-        // Extract the file number from the fd_ or store it on the reader.
-        // Assuming we added `uint64_t file_number_` to SSTableReader:
         uint64_t file_num = file_number_; 
 
         if (opts.block_cache) {
@@ -112,7 +107,6 @@ Status SSTableReader::Get(const ReadOptions& opts, const Slice& key, std::string
         }
 
         if (!data_block) {
-            // Cache miss (or cache disabled), read from disk
             Block* raw_block = nullptr;
             Status s = ReadBlock(block_offset, block_size, &raw_block);
             if (!s.ok()) return s;
@@ -124,8 +118,7 @@ Status SSTableReader::Get(const ReadOptions& opts, const Slice& key, std::string
             }
         }
 
-        // 4. Binary search inside the data block
-        std::unique_ptr<Block::Iterator> diter(data_block->NewIterator());
+        std::unique_ptr<lakestore::Iterator> diter(data_block->NewIterator());
         diter->Seek(key);
 
         if (diter->Valid() && diter->key().compare(key) == 0) {
