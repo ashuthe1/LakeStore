@@ -32,6 +32,8 @@ public:
     Status Get(const ReadOptions& opts, const Slice& key, std::string* value);
     Status Write(const WriteOptions& opts, WriteBatch* batch);
 
+    lakestore::Iterator* NewInternalIterator();
+
 private:
     DBImpl(const Options& options, const std::string& dbpath);
 

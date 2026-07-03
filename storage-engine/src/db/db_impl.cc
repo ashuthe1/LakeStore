@@ -91,36 +91,34 @@ Status DBImpl::Recover() {
 }
 
 Status DBImpl::Write(const WriteOptions& opts, WriteBatch* batch) {
-    // std::cout << "  [Write] Entered Write()" << std::endl;
     if (!bg_error_.ok()) return bg_error_;
     if (!wal_) return Status::IOError("WAL not initialized - DB might be corrupted");
 
     uint32_t op_count = CountOps(batch);
-    // std::cout << "  [Write] CountOps found " << op_count << " operations" << std::endl;
-
     SequenceNumber base_seq = last_sequence_.fetch_add(op_count) + 1;
     batch->sequence_number = base_seq;
 
+    // 1. Lock the mutex for the ENTIRE write process
     std::unique_lock<std::mutex> lock(mutex_);
-    while (imm_ != nullptr) bg_cv_.wait(lock);
-    MemTable* mem_to_insert = mem_;
-    lock.unlock();
+    
+    // Wait if the immutable memtable is still waiting to be flushed
+    while (imm_ != nullptr) {
+        bg_cv_.wait(lock);
+    }
 
-    // std::cout << "  [Write] Calling WAL Append..." << std::endl;
+    // 2. Serialized WAL Append
     Status s = wal_->Append(batch);
     if (opts.sync && s.ok()) s = wal_->Sync();
 
-    lock.lock();
     if (!s.ok()) {
-        // std::cout << "  [Write] WAL Append failed!" << std::endl;
         return s;
     }
 
-    // std::cout << "  [Write] Calling DecodeAndInsert..." << std::endl;
-    DecodeAndInsert(mem_to_insert, base_seq, batch->payload);
-    // std::cout << "  [Write] MemTable insertion complete." << std::endl;
+    // 3. Serialized MemTable Insertion (Prevents the infinite loop!)
+    DecodeAndInsert(mem_, base_seq, batch->payload);
 
-    if (mem_to_insert->ApproximateMemoryUsage() > 64 * 1024 * 1024) {
+    // 4. Check Compaction Threshold
+    if (mem_->ApproximateMemoryUsage() > 64 * 1024 * 1024) {
         imm_ = mem_;
         mem_ = new MemTable();
         MaybeScheduleCompaction();
@@ -352,6 +350,14 @@ void DBImpl::DecodeAndInsert(MemTable* mem, SequenceNumber seq, const std::strin
         }
         current_seq++;
     }
+}
+
+lakestore::Iterator* DBImpl::NewInternalIterator() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (mem_ != nullptr) {
+        return mem_->NewIterator();
+    }
+    return nullptr;
 }
 
 } // namespace lakestore
