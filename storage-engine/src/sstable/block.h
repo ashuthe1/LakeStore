@@ -17,17 +17,19 @@ public:
 
     size_t size() const { return size_; }
 
-    class Iterator {
+    class Iterator : public lakestore::Iterator { // Inherit here!
     public:
         Iterator(const char* data, uint32_t restarts, uint32_t num_restarts);
+        ~Iterator() override = default;
         
-        bool Valid() const { return current_ < restarts_; }
-        Slice key() const { return Slice(key_); }
-        Slice value() const { return value_; }
+        bool Valid() const override { return current_ < restarts_; }
+        Slice key() const override { return Slice(key_); }
+        Slice value() const override { return value_; }
+        Status status() const override { return Status::OK(); }
         
-        void SeekToFirst();
-        void Seek(const Slice& target);
-        void Next();
+        void SeekToFirst() override;
+        void Seek(const Slice& target) override;
+        void Next() override;
 
     private:
         void SeekToRestartPoint(uint32_t index);
@@ -44,7 +46,7 @@ public:
         Slice value_;           // Pointer to value in data_
     };
 
-    Iterator* NewIterator() const;
+    lakestore::Iterator* NewIterator() const; // Update return type
 
 private:
     const char* data_;

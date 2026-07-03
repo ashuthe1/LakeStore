@@ -1,7 +1,10 @@
 #pragma once
 
 #include "skiplist.h"
+#include "../iterator.h"
 #include <string>
+#include <memory>
+#include <atomic>
 
 namespace lakestore {
 
@@ -43,12 +46,32 @@ public:
     
     bool IsEmpty() const { return memory_usage_.load(std::memory_order_relaxed) == 0; }
     
-    // Ownership transferred to caller
-    SkipList::Iterator* NewIterator() const { return table_.NewIterator(); }
+    // Returns the unified Iterator interface. Ownership transferred to caller.
+    Iterator* NewIterator() const;
 
 private:
     SkipList table_;
     std::atomic<size_t> memory_usage_;
+};
+
+// Adapter to make SkipList::Iterator conform to the unified Iterator interface
+class MemTableIterator : public Iterator {
+public:
+    explicit MemTableIterator(const SkipList* list);
+    ~MemTableIterator() override = default;
+
+    bool Valid() const override;
+    void SeekToFirst() override;
+    void Seek(const Slice& target) override;
+    void Next() override;
+    
+    Slice key() const override;
+    Slice value() const override;
+    Status status() const override;
+
+private:
+    std::unique_ptr<SkipList::Iterator> iter_;
+    std::string encoded_key_cache_; // Holds memory for the Slice returned by key()
 };
 
 } // namespace lakestore

@@ -28,7 +28,7 @@ Block::~Block() {
     delete[] data_;
 }
 
-Block::Iterator* Block::NewIterator() const {
+lakestore::Iterator* Block::NewIterator() const {
     return new Iterator(data_, restart_offset_, num_restarts_);
 }
 
