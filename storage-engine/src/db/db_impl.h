@@ -46,6 +46,13 @@ public:
     // Primarily for tests and orderly shutdown.
     Status FlushAll();
 
+    // Read-only introspection (db_debug.cc): serializes internal state
+    // (memtables, levels, caches) as JSON for the inspector UI. Uses the
+    // same snapshot pinning as reads; never disturbs the data path.
+    void DebugJSON(std::string* out);
+    // Lists the (decoded) entries of one SSTable, bypassing the block cache.
+    Status DebugSSTableJSON(uint64_t file_number, std::string* out);
+
     // Encode/decode a WriteBatch to/from a WAL record:
     // [fixed64 sequence][fixed32 op_count][ops payload]
     static void EncodeBatchRecord(SequenceNumber seq, uint32_t count,

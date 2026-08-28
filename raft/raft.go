@@ -331,6 +331,9 @@ func (rf *Raft) Start(command []byte) (uint64, uint64, bool) {
 	rf.log = append(rf.log, entry)
 	rf.appendLogPersist([]Entry{entry})
 	rf.matchIndex[rf.id] = entry.Index
+	// Our own match advanced; in a single-node cluster that alone is a
+	// majority, so the commit check cannot wait for follower ACKs.
+	rf.maybeAdvanceCommit()
 
 	// Wake all replicators to push the new entry immediately.
 	for _, c := range rf.replicateCond {
@@ -362,6 +365,83 @@ func (rf *Raft) CommitIndex() uint64 {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	return rf.commitIndex
+}
+
+// DebugEntry is one log entry as reported by Debug.
+type DebugEntry struct {
+	Index uint64 `json:"index"`
+	Term  uint64 `json:"term"`
+	Data  []byte `json:"-"` // raw payload; the server decodes it for display
+}
+
+// DebugPeerProgress is the leader's replication bookkeeping for one peer.
+type DebugPeerProgress struct {
+	NextIndex  uint64 `json:"next_index"`
+	MatchIndex uint64 `json:"match_index"`
+}
+
+// DebugInfo is a read-only snapshot of a node's Raft state for inspection.
+type DebugInfo struct {
+	ID            uint64 `json:"id"`
+	State         string `json:"state"`
+	Term          uint64 `json:"term"`
+	VotedFor      uint64 `json:"voted_for"`
+	LeaderID      uint64 `json:"leader_id"`
+	CommitIndex   uint64 `json:"commit_index"`
+	LastApplied   uint64 `json:"last_applied"`
+	SnapshotIndex uint64 `json:"snapshot_index"`
+	SnapshotTerm  uint64 `json:"snapshot_term"`
+	FirstLogIndex uint64 `json:"first_log_index"`
+	LastLogIndex  uint64 `json:"last_log_index"`
+	LogEntryCount int    `json:"log_entry_count"`
+
+	RecentEntries []DebugEntry                 `json:"recent_entries"`
+	PeerProgress  map[uint64]DebugPeerProgress `json:"peer_progress,omitempty"` // leader only
+}
+
+// Debug returns a consistent snapshot of the node's state, including up to
+// maxEntries most recent log entries. Read-only; for inspection UIs.
+func (rf *Raft) Debug(maxEntries int) DebugInfo {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	info := DebugInfo{
+		ID:            rf.id,
+		State:         rf.state.String(),
+		Term:          rf.currentTerm,
+		VotedFor:      rf.votedFor,
+		LeaderID:      rf.leaderID,
+		CommitIndex:   rf.commitIndex,
+		LastApplied:   rf.lastApplied,
+		SnapshotIndex: rf.lastSnapshotIndex,
+		SnapshotTerm:  rf.lastSnapshotTerm,
+		FirstLogIndex: rf.firstLogIndex(),
+		LastLogIndex:  rf.lastLogIndex(),
+		LogEntryCount: len(rf.log),
+	}
+	if rf.state == Leader {
+		info.LeaderID = rf.id
+		info.PeerProgress = make(map[uint64]DebugPeerProgress, len(rf.peers))
+		for _, p := range rf.peers {
+			info.PeerProgress[p] = DebugPeerProgress{
+				NextIndex:  rf.nextIndex[p],
+				MatchIndex: rf.matchIndex[p],
+			}
+		}
+	}
+
+	start := 0
+	if maxEntries > 0 && len(rf.log) > maxEntries {
+		start = len(rf.log) - maxEntries
+	}
+	for _, e := range rf.log[start:] {
+		info.RecentEntries = append(info.RecentEntries, DebugEntry{
+			Index: e.Index,
+			Term:  e.Term,
+			Data:  append([]byte(nil), e.Data...),
+		})
+	}
+	return info
 }
 
 // Snapshot tells Raft the application has serialized its state through
@@ -449,6 +529,13 @@ func (rf *Raft) startElection() {
 	term := rf.currentTerm
 	votes := 1 // self
 
+	// A single-node cluster wins immediately — there are no reply handlers
+	// to perform the majority check otherwise.
+	if votes*2 > len(rf.peers) {
+		rf.becomeLeader()
+		return
+	}
+
 	for _, peer := range rf.peers {
 		if peer == rf.id {
 			continue
@@ -514,6 +601,7 @@ func (rf *Raft) becomeLeader() {
 	rf.log = append(rf.log, noop)
 	rf.appendLogPersist([]Entry{noop})
 	rf.matchIndex[rf.id] = noop.Index
+	rf.maybeAdvanceCommit() // single-node clusters commit right here
 
 	// Immediate replication round to assert leadership and push the no-op.
 	for _, c := range rf.replicateCond {

@@ -195,7 +195,14 @@ streams chunks.
   runs a concurrent load generator and reports throughput + p50/p95/p99.
 - **`scripts/run-cluster.sh` / `stop-cluster.sh`** — local 3-node cluster
   (ports 7101–7103, data + logs + pidfiles under `./data`); wrapped by
-  `make cluster-up` / `cluster-down`.
+  `make cluster-up` / `cluster-down`. Set `WRITE_BUFFER=262144` to make
+  engine flushes frequent enough to watch.
+- **Inspector UI** (`server/debug.go` + `server/ui/`) — every node can serve
+  a read-only debug page (`--debug-listen`, ports 8101–8103 locally) showing
+  the decoded Raft log, memtable contents, SSTables per level (click a file
+  to dump it), and the raw files on disk. It pins state exactly like a
+  normal read and bypasses the block cache, so inspecting a node under load
+  changes nothing. JSON endpoints: `/api/state`, `/api/sst?file=N`.
 
 ## 9. Testing this layer (`server/integration_test.go`)
 

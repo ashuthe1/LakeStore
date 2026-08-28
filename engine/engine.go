@@ -229,6 +229,31 @@ func (it *Iterator) Seek(key []byte) {
 
 func (it *Iterator) Next() { C.lakestore_iter_next(it.ptr) }
 
+// DebugJSON returns a JSON document describing the engine's internal state
+// (memtables, levels, files, caches). Read-only; safe under load.
+func (db *DB) DebugJSON() (string, error) {
+	if db.ptr == nil {
+		return "", ErrClosed
+	}
+	cjson := C.lakestore_debug_json(db.ptr)
+	defer C.lakestore_free(unsafe.Pointer(cjson))
+	return C.GoString(cjson), nil
+}
+
+// DebugSSTableJSON lists the decoded entries of one SSTable as JSON.
+func (db *DB) DebugSSTableJSON(fileNumber uint64) (string, error) {
+	if db.ptr == nil {
+		return "", ErrClosed
+	}
+	var cjson *C.char
+	cerr := C.lakestore_debug_sst_json(db.ptr, C.uint64_t(fileNumber), &cjson)
+	if err := toErr(cerr); err != nil {
+		return "", err
+	}
+	defer C.lakestore_free(unsafe.Pointer(cjson))
+	return C.GoString(cjson), nil
+}
+
 // Key returns a copy of the current key.
 func (it *Iterator) Key() []byte {
 	var clen C.size_t

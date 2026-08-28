@@ -20,6 +20,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/ashuthe1/LakeStore/engine"
 	"github.com/ashuthe1/LakeStore/server"
 )
 
@@ -53,6 +54,8 @@ func main() {
 		dataDir       = flag.String("data-dir", "", "directory for engine + raft state")
 		peersFlag     = flag.String("peers", "", "cluster membership: id=addr,id=addr,...")
 		snapThreshold = flag.Uint64("snapshot-threshold", 8192, "raft entries between log compactions")
+		debugListen   = flag.String("debug-listen", "", "serve the read-only inspector UI on this address (e.g. 127.0.0.1:8101); empty = disabled")
+		writeBuffer   = flag.Int("engine-write-buffer", 0, "engine memtable size in bytes before flushing to an SSTable (0 = engine default, 64MB); small values make flush/compaction easy to observe in the inspector")
 	)
 	flag.Parse()
 
@@ -70,12 +73,19 @@ func main() {
 
 	logger := log.New(os.Stderr, fmt.Sprintf("[lakestored %d] ", *id), log.LstdFlags|log.Lmsgprefix)
 
+	var engineOpts *engine.Options
+	if *writeBuffer > 0 {
+		engineOpts = &engine.Options{WriteBufferSize: *writeBuffer}
+	}
+
 	node, err := server.NewNode(server.Config{
 		ID:                *id,
 		ListenAddr:        *listen,
 		Peers:             peers,
 		DataDir:           *dataDir,
+		DebugAddr:         *debugListen,
 		SnapshotThreshold: *snapThreshold,
+		EngineOptions:     engineOpts,
 		Logger:            logger,
 	})
 	if err != nil {

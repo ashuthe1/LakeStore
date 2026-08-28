@@ -140,6 +140,22 @@ func (f *FSM) Scan(startKey []byte, limit int) ([][2][]byte, error) {
 	return out, nil
 }
 
+// DebugEngineJSON returns the engine's internal-state JSON (inspector UI).
+func (f *FSM) DebugEngineJSON() (string, error) {
+	f.mu.Lock()
+	db := f.db
+	f.mu.Unlock()
+	return db.DebugJSON()
+}
+
+// DebugSSTableJSON dumps one SSTable's entries as JSON (inspector UI).
+func (f *FSM) DebugSSTableJSON(fileNumber uint64) (string, error) {
+	f.mu.Lock()
+	db := f.db
+	f.mu.Unlock()
+	return db.DebugSSTableJSON(fileNumber)
+}
+
 // --- Snapshots ---
 // Snapshot format (gob): SnapshotPayload with the applied index and every
 // user + reserved pair. Fine for the scale this project targets; a

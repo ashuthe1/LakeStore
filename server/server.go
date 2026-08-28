@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -34,6 +35,10 @@ type Config struct {
 	Peers      map[uint64]string // node ID -> address, including self
 	DataDir    string
 
+	// DebugAddr, when non-empty, serves the read-only inspector UI and its
+	// JSON API (debug.go) on this address. Keep it on localhost.
+	DebugAddr string
+
 	// SnapshotThreshold is the number of applied entries between Raft log
 	// compactions. 0 uses the default.
 	SnapshotThreshold uint64
@@ -52,6 +57,9 @@ type Node struct {
 	listener  net.Listener
 	applyCh   chan raft.ApplyMsg
 	logger    *log.Logger
+
+	debugSrv      *http.Server
+	debugListener net.Listener
 
 	mu             sync.Mutex
 	waiters        map[uint64]*waiterGroup
@@ -145,6 +153,13 @@ func NewNode(cfg Config) (*Node, error) {
 		}
 	}()
 
+	if cfg.DebugAddr != "" {
+		if err := n.startDebugServer(); err != nil {
+			n.Close()
+			return nil, fmt.Errorf("node %d: %w", cfg.ID, err)
+		}
+	}
+
 	logger.Printf("node %d: serving on %s", cfg.ID, cfg.ListenAddr)
 	return n, nil
 }
@@ -166,6 +181,7 @@ func (n *Node) Close() {
 	n.mu.Unlock()
 	close(n.stopCh)
 
+	n.stopDebugServer()
 	n.grpc.Stop()
 	n.rf.Kill()
 

@@ -39,6 +39,7 @@ set(LAKESTORE_SOURCES
     src/cache/lru_cache.cc
     src/db/manifest.cc
     src/db/table_cache.cc
+    src/db/db_debug.cc
     src/db/compaction.cc
     src/db/db_impl.cc
     src/c_api/c_api.cc  # <--- ADDED C-API HERE

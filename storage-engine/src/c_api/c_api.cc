@@ -213,6 +213,21 @@ const char* lakestore_iter_value(const lakestore_iterator_t* it, size_t* len) {
     return v.data;
 }
 
+char* lakestore_debug_json(lakestore_t* db) {
+    std::string json;
+    db->rep->DebugJSON(&json);
+    return CopyString(json);
+}
+
+char* lakestore_debug_sst_json(lakestore_t* db, uint64_t file_number, char** json) {
+    *json = nullptr;
+    std::string out;
+    Status s = db->rep->DebugSSTableJSON(file_number, &out);
+    if (!s.ok()) return CopyString(s.ToString());
+    *json = CopyString(out);
+    return nullptr;
+}
+
 void lakestore_free(void* ptr) {
     if (ptr) {
         free(ptr);

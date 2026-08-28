@@ -5,11 +5,15 @@ package server
 // consistency after recovery, and raft log compaction.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -363,6 +367,111 @@ func TestClusterSnapshotCatchUp(t *testing.T) {
 			t.Fatal("follower never caught up via snapshot")
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func TestInspectorEndpoints(t *testing.T) {
+	// Single-node cluster (majority of 1) with the debug server enabled.
+	addrs := freePorts(t, 2)
+	peers := map[uint64]string{1: addrs[0]}
+	node, err := NewNode(Config{
+		ID:            1,
+		ListenAddr:    addrs[0],
+		DebugAddr:     addrs[1],
+		Peers:         peers,
+		DataDir:       t.TempDir(),
+		EngineOptions: &engine.Options{WriteBufferSize: 1 << 20},
+		Logger:        log.New(os.Stderr, "[inspect] ", 0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close()
+
+	// Wait for leadership, then write through the normal path.
+	deadline := time.Now().Add(5 * time.Second)
+	for !node.IsLeader() {
+		if time.Now().After(deadline) {
+			t.Fatal("single node never became leader")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	cl := client.New([]string{node.Addr()})
+	defer cl.Close()
+	ctx := context.Background()
+	for i := 0; i < 10; i++ {
+		if err := cl.Put(ctx, []byte(fmt.Sprintf("ins_%02d", i)), []byte("v")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// /api/state must return coherent JSON reflecting the writes.
+	resp, err := http.Get("http://" + node.DebugAddr() + "/api/state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("/api/state returned %d", resp.StatusCode)
+	}
+	var state struct {
+		NodeID uint64 `json:"node_id"`
+		Raft   struct {
+			State       string `json:"state"`
+			CommitIndex uint64 `json:"commit_index"`
+		} `json:"raft"`
+		RaftLog []struct {
+			Index uint64 `json:"index"`
+			Noop  bool   `json:"noop"`
+			Ops   []struct{ Op, Key string } `json:"ops"`
+		} `json:"raft_log_decoded"`
+		Engine struct {
+			LastSequence uint64 `json:"last_sequence"`
+			Memtable     struct {
+				EntryCount int `json:"entry_count"`
+			} `json:"memtable"`
+		} `json:"engine"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
+		t.Fatalf("state is not valid JSON: %v", err)
+	}
+	if state.NodeID != 1 || state.Raft.State != "Leader" {
+		t.Fatalf("unexpected state: %+v", state)
+	}
+	if state.Engine.Memtable.EntryCount < 10 {
+		t.Fatalf("memtable should show the writes, got %d entries", state.Engine.Memtable.EntryCount)
+	}
+	foundPut := false
+	for _, e := range state.RaftLog {
+		for _, op := range e.Ops {
+			if op.Op == "PUT" && op.Key == "ins_00" {
+				foundPut = true
+			}
+		}
+	}
+	if !foundPut {
+		t.Fatal("decoded raft log does not show the PUT commands")
+	}
+
+	// /api/sst with a bogus file must fail cleanly, not crash.
+	resp2, err := http.Get("http://" + node.DebugAddr() + "/api/sst?file=999999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode == 200 {
+		t.Fatal("expected an error for a missing SSTable")
+	}
+
+	// The UI itself must be served.
+	resp3, err := http.Get("http://" + node.DebugAddr() + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp3.Body)
+	resp3.Body.Close()
+	if !bytes.Contains(body, []byte("LakeStore Inspector")) {
+		t.Fatal("inspector HTML not served")
 	}
 }
 
