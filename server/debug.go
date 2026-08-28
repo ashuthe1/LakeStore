@@ -8,16 +8,24 @@ package server
 // touches the write path or the block cache.
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
+	mrand "math/rand/v2"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/ashuthe1/LakeStore/raft"
 )
 
 //go:embed ui/index.html
@@ -184,6 +192,17 @@ func (n *Node) startDebugServer() error {
 		w.Write([]byte(out))
 	}))
 
+	// Typed viewer for ANY file in the node's data directory: engine WALs,
+	// SSTables, MANIFEST, CURRENT, and the raft log/meta/snapshot files.
+	mux.HandleFunc("/api/file", cors(n.handleFileDump))
+
+	// Single operations and a bulk load generator. These run through the
+	// node's NORMAL propose/apply pipeline — exactly what a gRPC client
+	// triggers — so what you observe is real behavior. They exist only on
+	// this optional localhost debug listener.
+	mux.HandleFunc("/api/op", cors(n.handleDebugOp))
+	mux.HandleFunc("/api/load", cors(n.handleDebugLoad))
+
 	listener, err := net.Listen("tcp", n.cfg.DebugAddr)
 	if err != nil {
 		return fmt.Errorf("debug listen %s: %w", n.cfg.DebugAddr, err)
@@ -197,6 +216,274 @@ func (n *Node) startDebugServer() error {
 	}()
 	n.logger.Printf("node %d: inspector UI on http://%s", n.cfg.ID, listener.Addr())
 	return nil
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+// handleFileDump decodes one on-disk file by type. Everything is opened
+// read-only; SSTable/WAL decoding happens inside the engine's debug paths.
+func (n *Node) handleFileDump(w http.ResponseWriter, r *http.Request) {
+	dir := r.URL.Query().Get("dir")
+	name := r.URL.Query().Get("name")
+	if strings.ContainsAny(name, "/\\") || name == "" || (dir != "engine" && dir != "raft") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad dir/name"})
+		return
+	}
+
+	fail := func(err error) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+	}
+	rawJSON := func(kind, payload string, err error) {
+		if err != nil {
+			fail(err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"kind":%q,"data":%s}`, kind, payload)
+	}
+
+	switch {
+	case dir == "engine" && strings.HasSuffix(name, ".ldb"):
+		num, err := strconv.ParseUint(strings.TrimSuffix(name, ".ldb"), 10, 64)
+		if err != nil {
+			fail(err)
+			return
+		}
+		out, err := n.fsm.DebugSSTableJSON(num)
+		rawJSON("sstable", out, err)
+
+	case dir == "engine" && strings.HasSuffix(name, ".log"):
+		num, err := strconv.ParseUint(strings.TrimSuffix(name, ".log"), 10, 64)
+		if err != nil {
+			fail(err)
+			return
+		}
+		out, err := n.fsm.DebugWALJSON(num)
+		rawJSON("wal", out, err)
+
+	case dir == "engine" && strings.HasPrefix(name, "MANIFEST-"):
+		num, err := strconv.ParseUint(strings.TrimPrefix(name, "MANIFEST-"), 10, 64)
+		if err != nil {
+			fail(err)
+			return
+		}
+		out, err := n.fsm.DebugManifestJSON(num)
+		rawJSON("manifest", out, err)
+
+	case dir == "engine" && name == "CURRENT":
+		content, err := os.ReadFile(filepath.Join(n.cfg.DataDir, "engine", "CURRENT"))
+		if err != nil {
+			fail(err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"kind": "current",
+			"data": map[string]string{"content": strings.TrimSpace(string(content))}})
+
+	case dir == "raft" && name == "meta.bin":
+		meta, err := raft.ReadMetaFile(filepath.Join(n.cfg.DataDir, "raft", "meta.bin"))
+		if err != nil {
+			fail(err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"kind": "raft_meta", "data": map[string]uint64{
+			"term": meta.Term, "voted_for": meta.VotedFor,
+			"snapshot_index": meta.SnapshotIndex, "snapshot_term": meta.SnapshotTerm,
+		}})
+
+	case dir == "raft" && name == "log.bin":
+		entries, err := raft.ReadLogFile(filepath.Join(n.cfg.DataDir, "raft", "log.bin"))
+		if err != nil {
+			fail(err)
+			return
+		}
+		const cap = 2000
+		start := 0
+		if len(entries) > cap {
+			start = len(entries) - cap
+		}
+		decoded := make([]debugLogEntry, 0, len(entries)-start)
+		for _, e := range entries[start:] {
+			de := debugLogEntry{Index: e.Index, Term: e.Term, Bytes: len(e.Data)}
+			if len(e.Data) == 0 {
+				de.Noop = true
+			} else {
+				de.Ops = decodeEntryOps(e.Data)
+			}
+			decoded = append(decoded, de)
+		}
+		writeJSON(w, 200, map[string]any{"kind": "raft_log", "data": map[string]any{
+			"entry_count": len(entries), "entries_capped": len(entries) > cap,
+			"entries": decoded,
+		}})
+
+	case dir == "raft" && name == "snapshot.bin":
+		data, err := os.ReadFile(filepath.Join(n.cfg.DataDir, "raft", "snapshot.bin"))
+		if err != nil {
+			fail(err)
+			return
+		}
+		summary, err := DecodeSnapshotForDebug(data, 200)
+		if err != nil {
+			fail(err)
+			return
+		}
+		summary["total_bytes"] = len(data)
+		writeJSON(w, 200, map[string]any{"kind": "raft_snapshot", "data": summary})
+
+	default:
+		writeJSON(w, http.StatusBadRequest,
+			map[string]string{"error": "no viewer for this file type: " + name})
+	}
+}
+
+// leaderDebugHint maps the current leader to its likely inspector address.
+func (n *Node) leaderDebugHint() string {
+	id, addr := n.leaderHint()
+	if id == 0 || addr == "" {
+		return ""
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		return ""
+	}
+	return net.JoinHostPort(host, strconv.Itoa(p+1000))
+}
+
+func (n *Node) handleDebugOp(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
+		return
+	}
+	var req struct {
+		Op    string `json:"op"`
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Key == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "need {op, key, value?}"})
+		return
+	}
+
+	notLeader := func() {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "not the leader", "leader_debug": n.leaderDebugHint()})
+	}
+
+	switch req.Op {
+	case "put":
+		err := n.propose(Command{Op: OpPut, Key: []byte(req.Key), Value: []byte(req.Value)})
+		if errors.Is(err, errNotLeader) {
+			notLeader()
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+	case "del":
+		err := n.propose(Command{Op: OpDelete, Key: []byte(req.Key)})
+		if errors.Is(err, errNotLeader) {
+			notLeader()
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+	case "get":
+		if err := n.linearizableRead(); err != nil {
+			if errors.Is(err, errNotLeader) {
+				notLeader()
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		val, found, err := n.fsm.Get([]byte(req.Key))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "found": found, "value": string(val)})
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "op must be put/get/del"})
+	}
+}
+
+// handleDebugLoad generates N random-key PUTs through the normal proposal
+// pipeline so flushes and compactions can be watched happening.
+func (n *Node) handleDebugLoad(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
+		return
+	}
+	var req struct {
+		N         int `json:"n"`
+		ValueSize int `json:"value_size"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "need {n, value_size?}"})
+		return
+	}
+	if req.N <= 0 || req.N > 200000 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "n must be 1..200000"})
+		return
+	}
+	if req.ValueSize <= 0 {
+		req.ValueSize = 100
+	}
+	if req.ValueSize > 4096 {
+		req.ValueSize = 4096
+	}
+	if _, isLeader := n.rf.GetState(); !isLeader {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "not the leader", "leader_debug": n.leaderDebugHint()})
+		return
+	}
+
+	value := bytes.Repeat([]byte("x"), req.ValueSize)
+	seed := mrand.Uint64()
+	start := time.Now()
+
+	var wg sync.WaitGroup
+	var failed atomic.Int64
+	work := make(chan int, req.N)
+	for i := 0; i < req.N; i++ {
+		work <- i
+	}
+	close(work)
+	for wkr := 0; wkr < 16; wkr++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range work {
+				key := fmt.Sprintf("load_%08x_%06d", seed&0xFFFFFFFF, i)
+				if err := n.propose(Command{Op: OpPut, Key: []byte(key), Value: value}); err != nil {
+					failed.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	elapsed := time.Since(start)
+	writeJSON(w, 200, map[string]any{
+		"ok":          true,
+		"requested":   req.N,
+		"failed":      failed.Load(),
+		"duration_ms": elapsed.Milliseconds(),
+		"ops_per_sec": int(float64(req.N-int(failed.Load())) / elapsed.Seconds()),
+	})
 }
 
 func (n *Node) stopDebugServer() {

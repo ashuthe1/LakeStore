@@ -80,9 +80,13 @@ const char* lakestore_iter_value(const lakestore_iterator_t* it, size_t* len);
 // Returns a malloc'd JSON document describing internal state (memtables,
 // levels, files, caches). Never fails. Free with lakestore_free.
 char* lakestore_debug_json(lakestore_t* db);
-// Dumps the entries of one SSTable as malloc'd JSON into *json.
-// Returns NULL on success or an error string.
+// Dumps the entries + physical structure of one SSTable as malloc'd JSON
+// into *json. Returns NULL on success or an error string.
 char* lakestore_debug_sst_json(lakestore_t* db, uint64_t file_number, char** json);
+// Decodes the records of one WAL file (N.log) as JSON.
+char* lakestore_debug_wal_json(lakestore_t* db, uint64_t file_number, char** json);
+// Decodes the VersionEdits of one MANIFEST-N file as JSON.
+char* lakestore_debug_manifest_json(lakestore_t* db, uint64_t file_number, char** json);
 
 // Frees memory allocated by lakestore_get (the value) or returned error strings.
 void lakestore_free(void* ptr);

@@ -178,29 +178,45 @@ The inspector (next section) shows all of this live, decoded.
 
 ## Inspector UI — see where your data lives
 
-Each node serves a **read-only web inspector** (`--debug-listen`, on by
-default in the local cluster at http://127.0.0.1:8101/8102/8103). It reads
-the node's live internals on every click — nothing is sampled or cached,
-and it never touches the write path or block cache:
+Each node serves a **web inspector** (`--debug-listen`, on by default in the
+local cluster at http://127.0.0.1:8101/8102/8103). Inspection is strictly
+read-only — it pins state exactly like a normal read and bypasses the block
+cache — and the whole feature lives on an optional localhost listener,
+untouched in production deployments that don't pass the flag.
 
-- **Cluster view** — every node's role, term, commit/applied index, engine
-  sequence number; watch them converge after a failover.
-- **Raft log, decoded** — each entry as `PUT key=value` / `DEL key` /
-  `NO-OP`, with term, size, batching visible (one entry holding many
-  commands), and uncommitted entries flagged.
-- **MemTable / immutable memtable** — the actual internal keys: user key,
-  MVCC sequence number, PUT vs DEL tombstone, value.
-- **Levels & SSTables** — every `.ldb` file per level with its key range;
-  **click a file to dump its contents** (decoded internal entries).
-- **Files on disk** — the raw `engine/` and `raft/` directory listings with
-  sizes: WALs, SSTables, MANIFEST, raft log/meta/snapshot.
+**Drive the cluster from the page.** An operations bar runs single
+`PUT` / `GET` / `DEL` commands and a **load generator** (+1K / +10K / +50K /
+custom count + value size) that fires random-key writes — all through the
+node's *normal* Raft → FSM → engine pipeline (with automatic leader
+redirect), so what you observe is real behavior, not a simulation.
 
-A fun exercise: run `lakectl put k v1`, see it in the memtable; run a bench
-to force a flush, see `k` move into an L0 file; `lakectl del k`, see the
-tombstone in the memtable *above* the old value in L0; keep writing until
-compaction merges them and both disappear. That's the whole LSM lifecycle,
+**Watch state change**, tab by tab:
+
+- **Overview** — role/term, commit vs applied, and **compaction pressure
+  gauges**: memtable fill vs `write_buffer_size` (→ next flush), L0 file
+  count vs trigger (→ next L0→L1 compaction), every level's size vs its
+  budget, and raft-log growth vs the snapshot threshold. Plus lifetime
+  counters: flushes, major compactions, bytes compacted, write stalls.
+- **Raft** — decoded log (`PUT k=v` / `DEL k` / `NO-OP`, uncommitted entries
+  flagged, batching visible) and the leader's per-peer replication lag.
+- **MemTables** — active + immutable, as raw internal keys: user key, MVCC
+  sequence, PUT vs tombstone.
+- **SSTables** — levels with size budgets; **click any file** for its full
+  physical structure: data-block map (offset/size/entries/key range per
+  block), bloom filter statistics (size, k probes, fill ratio, estimated
+  false-positive rate), and all decoded entries.
+- **Files** — every file on disk is clickable and **decodes by type**:
+  engine WALs (`N.log` → write batches with sequences), SSTables,
+  `MANIFEST-N` (the VersionEdit history: which files were added/deleted at
+  which level), `CURRENT`, and raft `log.bin` / `meta.bin` / `snapshot.bin`.
+
+The classic exercise: `PUT hello ashutosh` and find it in the memtable; hit
+**+10K** and watch the memtable gauge climb, spill into L0, and compact into
+L1; `DEL hello` and find the tombstone sitting *above* the old value; keep
+loading until compaction erases both. That's the entire LSM lifecycle,
 observable. JSON endpoints for scripting: `GET /api/state`,
-`GET /api/sst?file=N`.
+`GET /api/file?dir=engine|raft&name=<file>`, `POST /api/op`,
+`POST /api/load`.
 
 ## Benchmarking
 

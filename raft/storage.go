@@ -194,20 +194,36 @@ func (fs *FileStorage) Load() (Meta, []Entry, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	var meta Meta
-	metaBytes, err := readIfExists(fs.metaPath())
+	meta, err := ReadMetaFile(fs.metaPath())
 	if err != nil {
 		return meta, nil, err
+	}
+	entries, err := ReadLogFile(fs.logPath())
+	return meta, entries, err
+}
+
+// ReadMetaFile decodes a meta.bin written by FileStorage. Strictly
+// read-only — usable for inspection of a live node's files.
+func ReadMetaFile(path string) (Meta, error) {
+	var meta Meta
+	metaBytes, err := readIfExists(path)
+	if err != nil {
+		return meta, err
 	}
 	if len(metaBytes) > 0 {
 		if err := gob.NewDecoder(bytes.NewReader(metaBytes)).Decode(&meta); err != nil {
-			return meta, nil, fmt.Errorf("raft storage: decode meta: %w", err)
+			return meta, fmt.Errorf("raft storage: decode meta: %w", err)
 		}
 	}
+	return meta, nil
+}
 
-	logBytes, err := readIfExists(fs.logPath())
+// ReadLogFile decodes a log.bin written by FileStorage, stopping cleanly at
+// a torn or corrupt tail. Strictly read-only.
+func ReadLogFile(path string) ([]Entry, error) {
+	logBytes, err := readIfExists(path)
 	if err != nil {
-		return meta, nil, err
+		return nil, err
 	}
 	var entries []Entry
 	r := bytes.NewReader(logBytes)
@@ -231,7 +247,7 @@ func (fs *FileStorage) Load() (Meta, []Entry, error) {
 		}
 		entries = append(entries, e)
 	}
-	return meta, entries, nil
+	return entries, nil
 }
 
 // --- MemoryStorage (tests) ---

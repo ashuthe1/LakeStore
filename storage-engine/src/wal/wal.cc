@@ -159,7 +159,12 @@ Status WAL::AppendRecord(const Slice& record) {
 }
 
 Status WAL::Recover(const std::function<Status(const Slice& record)>& apply_fn) {
-    int read_fd = ::open(filename_.c_str(), O_RDONLY);
+    return ReadAll(filename_, apply_fn);
+}
+
+Status WAL::ReadAll(const std::string& filename,
+                    const std::function<Status(const Slice& record)>& apply_fn) {
+    int read_fd = ::open(filename.c_str(), O_RDONLY);
     if (read_fd < 0) {
         // If file doesn't exist, there's nothing to recover.
         return Status::OK();

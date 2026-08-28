@@ -37,6 +37,12 @@ public:
     // Called on startup to replay records.
     Status Recover(const std::function<Status(const Slice& record)>& apply_fn);
 
+    // Read-only record scan of any WAL-format file (data logs, MANIFEST).
+    // Unlike constructing a WAL, this never opens the file for writing and
+    // never creates it — safe for inspection of live files.
+    static Status ReadAll(const std::string& filename,
+                          const std::function<Status(const Slice& record)>& apply_fn);
+
     Status Sync();
     uint64_t FileNumber() const { return file_number_; }
     const std::string& Filename() const { return filename_; }

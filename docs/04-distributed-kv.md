@@ -198,11 +198,18 @@ streams chunks.
   `make cluster-up` / `cluster-down`. Set `WRITE_BUFFER=262144` to make
   engine flushes frequent enough to watch.
 - **Inspector UI** (`server/debug.go` + `server/ui/`) — every node can serve
-  a read-only debug page (`--debug-listen`, ports 8101–8103 locally) showing
-  the decoded Raft log, memtable contents, SSTables per level (click a file
-  to dump it), and the raw files on disk. It pins state exactly like a
-  normal read and bypasses the block cache, so inspecting a node under load
-  changes nothing. JSON endpoints: `/api/state`, `/api/sst?file=N`.
+  a debug page (`--debug-listen`, ports 8101–8103 locally) with: compaction
+  pressure gauges (memtable fill, L0 count, level budgets, raft-log growth
+  toward the snapshot threshold), the decoded Raft log, memtable contents,
+  SSTable physical structure (block map + bloom filter statistics), and a
+  typed decoder for **every file on disk** — engine WALs, SSTables,
+  MANIFEST, CURRENT, raft log/meta/snapshot. It also has an operations bar
+  (single PUT/GET/DEL and a bulk load generator) that drives the node's
+  normal propose→apply pipeline with automatic leader redirect. Inspection
+  paths pin state exactly like a normal read and bypass the block cache, so
+  watching a node under load changes nothing; the write controls exist only
+  on this optional localhost listener. JSON endpoints: `/api/state`,
+  `/api/file?dir=&name=`, `POST /api/op`, `POST /api/load`.
 
 ## 9. Testing this layer (`server/integration_test.go`)
 

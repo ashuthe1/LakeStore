@@ -6,149 +6,241 @@
 <title>LakeStore Inspector</title>
 <style>
   :root {
-    --bg: #0f1419; --panel: #161d26; --panel2: #1c2530; --border: #2a3644;
-    --text: #d8e1ea; --dim: #8296a8; --accent: #4fb3ff; --green: #46c78c;
-    --amber: #e0b34d; --red: #e06c60; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    --bg:#0d1218; --panel:#141c26; --panel2:#1b2632; --panel3:#223040;
+    --border:#2b3a4b; --text:#dbe5ee; --dim:#8aa0b4; --accent:#53b6ff;
+    --green:#4ad295; --amber:#eec163; --red:#ee7b6e; --purple:#b78cf5;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
   }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-         font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-  header { padding: 14px 20px; border-bottom: 1px solid var(--border);
-           display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
-  header h1 { font-size: 17px; margin: 0; }
-  header h1 span { color: var(--accent); }
-  header input[type=text] { flex: 1; min-width: 280px; background: var(--panel);
-    color: var(--text); border: 1px solid var(--border); border-radius: 6px;
-    padding: 6px 10px; font-family: var(--mono); font-size: 12px; }
-  button { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
-    border-radius: 6px; padding: 6px 14px; cursor: pointer; font-size: 13px; }
-  button:hover { border-color: var(--accent); }
-  label.auto { color: var(--dim); font-size: 12px; display: flex; gap: 6px; align-items: center; }
-  main { padding: 16px 20px 60px; max-width: 1400px; margin: 0 auto; }
-  section { background: var(--panel); border: 1px solid var(--border);
-    border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
-  section h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase;
-    letter-spacing: .08em; color: var(--dim); }
-  table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 12px; }
-  th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--border);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
-  th { color: var(--dim); font-weight: 600; }
-  tr.sel { outline: 1px solid var(--accent); background: var(--panel2); }
-  tr.clickable { cursor: pointer; }
-  tr.clickable:hover { background: var(--panel2); }
-  .role-Leader { color: var(--green); font-weight: 700; }
-  .role-Follower { color: var(--accent); }
-  .role-Candidate { color: var(--amber); }
-  .err { color: var(--red); }
-  .dim { color: var(--dim); }
-  .pill { display: inline-block; background: var(--panel2); border: 1px solid var(--border);
-    border-radius: 20px; padding: 2px 10px; margin: 2px 4px 2px 0; font-family: var(--mono);
-    font-size: 11px; cursor: pointer; }
-  .pill:hover { border-color: var(--accent); }
-  .pill.open { border-color: var(--green); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
-  .stat { background: var(--panel2); border-radius: 8px; padding: 8px 12px; }
-  .stat .k { color: var(--dim); font-size: 11px; }
-  .stat .v { font-family: var(--mono); font-size: 15px; margin-top: 2px; }
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  @media (max-width: 1000px) { .cols { grid-template-columns: 1fr; } }
-  .scroll { max-height: 340px; overflow: auto; }
-  .note { color: var(--dim); font-size: 12px; margin: 6px 0 0; }
-  .type-PUT { color: var(--green); } .type-DEL { color: var(--red); }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  header { position:sticky; top:0; z-index:10; background:var(--bg);
+           padding:12px 22px; border-bottom:1px solid var(--border);
+           display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:17px; margin:0 14px 0 0; }
+  header h1 b { color:var(--accent); }
+  header input[type=text] { flex:1; min-width:260px; background:var(--panel);
+    color:var(--text); border:1px solid var(--border); border-radius:7px;
+    padding:7px 11px; font-family:var(--mono); font-size:12px; }
+  button { background:var(--panel2); color:var(--text); border:1px solid var(--border);
+    border-radius:7px; padding:7px 14px; cursor:pointer; font-size:13px; transition:.12s; }
+  button:hover { border-color:var(--accent); color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#06121d; font-weight:600; }
+  button.primary:hover { filter:brightness(1.12); color:#06121d; }
+  button.danger:hover { border-color:var(--red); color:var(--red); }
+  label.auto { color:var(--dim); font-size:12px; display:flex; gap:6px; align-items:center; }
+  main { padding:16px 22px 80px; max-width:1500px; margin:0 auto; }
+  section { background:var(--panel); border:1px solid var(--border);
+    border-radius:12px; padding:16px 18px; margin-bottom:16px; }
+  h2 { margin:0 0 12px; font-size:12px; text-transform:uppercase;
+       letter-spacing:.1em; color:var(--dim); font-weight:700; }
+  h2 .hint { text-transform:none; letter-spacing:0; font-weight:400; }
+  table { border-collapse:collapse; width:100%; font-family:var(--mono); font-size:12px; }
+  th,td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--border);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:460px; }
+  th { color:var(--dim); font-weight:600; position:sticky; top:0; background:var(--panel); }
+  tr.sel { outline:1.5px solid var(--accent); background:var(--panel2); }
+  tr.clickable { cursor:pointer; } tr.clickable:hover { background:var(--panel2); }
+  .role-Leader { color:var(--green); font-weight:700; }
+  .role-Follower { color:var(--accent); } .role-Candidate { color:var(--amber); }
+  .err { color:var(--red); } .ok { color:var(--green); } .dim { color:var(--dim); }
+  .type-PUT { color:var(--green); font-weight:600; } .type-DEL { color:var(--red); font-weight:600; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(165px,1fr)); gap:10px; }
+  .stat { background:var(--panel2); border:1px solid var(--border); border-radius:9px; padding:9px 13px; }
+  .stat .k { color:var(--dim); font-size:11px; }
+  .stat .v { font-family:var(--mono); font-size:15px; margin-top:3px; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+  @media (max-width:1050px) { .cols { grid-template-columns:1fr; } }
+  .scroll { max-height:380px; overflow:auto; border:1px solid var(--border); border-radius:8px; }
+  .scroll-tall { max-height:560px; }
+  .note { color:var(--dim); font-size:12px; margin:8px 0 0; }
+  /* tabs */
+  .tabs { display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap; }
+  .tab { padding:7px 16px; border-radius:8px; cursor:pointer; font-size:13px;
+         border:1px solid var(--border); background:var(--panel); color:var(--dim); }
+  .tab.on { background:var(--panel3); color:var(--text); border-color:var(--accent); font-weight:600; }
+  /* gauges */
+  .gauge { margin:10px 0; }
+  .gauge .lbl { display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px; }
+  .gauge .lbl b { font-family:var(--mono); font-weight:500; }
+  .bar { height:10px; border-radius:6px; background:var(--panel3); overflow:hidden; }
+  .bar i { display:block; height:100%; border-radius:6px; background:var(--green); transition:width .4s; }
+  .bar i.warn { background:var(--amber); } .bar i.hot { background:var(--red); }
+  /* ops */
+  .ops { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .ops input, .ops select { background:var(--panel2); color:var(--text);
+    border:1px solid var(--border); border-radius:7px; padding:7px 10px;
+    font-family:var(--mono); font-size:12px; }
+  .ops input.key { width:170px; } .ops input.val { width:200px; } .ops input.num { width:90px; }
+  .sep { width:1px; align-self:stretch; background:var(--border); margin:0 6px; }
+  /* files / pills */
+  .pill { display:inline-block; background:var(--panel2); border:1px solid var(--border);
+    border-radius:18px; padding:3px 12px; margin:3px 5px 3px 0; font-family:var(--mono);
+    font-size:11px; cursor:pointer; transition:.12s; }
+  .pill:hover { border-color:var(--accent); } .pill.open { border-color:var(--green); color:var(--green); }
+  .file-link { color:var(--accent); cursor:pointer; }
+  .file-link:hover { text-decoration:underline; }
+  /* toast */
+  #toast { position:fixed; bottom:22px; right:22px; z-index:99; display:flex;
+           flex-direction:column; gap:8px; align-items:flex-end; }
+  .t { background:var(--panel3); border:1px solid var(--border); border-left:4px solid var(--accent);
+       border-radius:9px; padding:10px 16px; font-size:13px; font-family:var(--mono);
+       max-width:460px; animation:fadein .18s; }
+  .t.ok { border-left-color:var(--green); } .t.bad { border-left-color:var(--red); }
+  @keyframes fadein { from { opacity:0; transform:translateY(6px);} }
+  .spin { display:inline-block; animation:rot 1s linear infinite; }
+  @keyframes rot { to { transform:rotate(360deg);} }
+  .kbd { font-family:var(--mono); background:var(--panel3); border-radius:4px; padding:1px 6px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Lake<span>Store</span> Inspector</h1>
+  <h1>Lake<b>Store</b> Inspector</h1>
   <input type="text" id="nodes" spellcheck="false"
          title="Comma-separated inspector addresses of every node">
-  <button onclick="refreshAll()">Refresh</button>
+  <button class="primary" onclick="refreshAll()">Refresh</button>
   <label class="auto"><input type="checkbox" id="auto"> auto (2s)</label>
 </header>
 <main>
+
   <section>
-    <h2>Cluster</h2>
+    <h2>Operations <span class="hint">— run against the selected node through the normal
+      Raft → FSM → engine pipeline (auto-redirects to the leader)</span></h2>
+    <div class="ops">
+      <input class="key" id="op-key" placeholder="key" value="hello">
+      <input class="val" id="op-val" placeholder="value" value="ashutosh">
+      <button onclick="doOp('put')">PUT</button>
+      <button onclick="doOp('get')">GET</button>
+      <button class="danger" onclick="doOp('del')">DEL</button>
+      <div class="sep"></div>
+      <span class="dim" style="font-size:12px">Load generator:</span>
+      <button onclick="doLoad(1000)">+1K</button>
+      <button onclick="doLoad(10000)">+10K</button>
+      <button onclick="doLoad(50000)">+50K</button>
+      <input class="num" id="load-n" placeholder="custom n">
+      <input class="num" id="load-vs" placeholder="val bytes" value="100">
+      <button onclick="doLoad(0)">Go</button>
+      <span id="busy"></span>
+    </div>
+    <p class="note">Random keys look like <span class="kbd">load_9f3a2c1b_000042</span>.
+      Fire a batch, then watch the memtable fill on the Overview gauges, spill into L0,
+      and compact into L1 — refresh (or enable auto) while it runs.</p>
+  </section>
+
+  <section>
+    <h2>Cluster <span class="hint">— click a row to inspect a node</span></h2>
     <div class="scroll"><table id="cluster"></table></div>
-    <p class="note">Click a row to inspect that node. Everything below is read
-      directly from that node's live internals — nothing is cached by the UI.</p>
   </section>
 
   <div id="detail" style="display:none">
-    <section>
-      <h2>Node <span id="d-node"></span> — Raft</h2>
-      <div class="grid" id="raft-stats"></div>
-      <div class="cols" style="margin-top:12px">
+    <div class="tabs" id="tabs"></div>
+
+    <section data-tab="Overview">
+      <h2>Node <span id="d-node"></span> — health &amp; compaction pressure</h2>
+      <div class="grid" id="ov-stats"></div>
+      <div class="cols" style="margin-top:16px">
         <div>
-          <h2>Raft log (most recent entries, decoded)</h2>
-          <div class="scroll"><table id="raft-log"></table></div>
+          <h2>When does the next flush / compaction happen?</h2>
+          <div id="gauges"></div>
+          <p class="note">Memtable full → rotated + flushed as an L0 SSTable.
+            L0 at trigger → merged into L1. A level over its budget → merged one level down.
+            Raft log at threshold → snapshot + compaction.</p>
+        </div>
+        <div>
+          <h2>Lifetime counters</h2>
+          <div class="grid" id="ov-counters"></div>
+        </div>
+      </div>
+    </section>
+
+    <section data-tab="Raft" style="display:none">
+      <div class="grid" id="raft-stats"></div>
+      <div class="cols" style="margin-top:14px">
+        <div>
+          <h2>Raft log <span class="hint">(most recent, decoded; newest first)</span></h2>
+          <div class="scroll scroll-tall"><table id="raft-log"></table></div>
         </div>
         <div>
           <h2>Peer replication progress (leader only)</h2>
           <div class="scroll"><table id="peer-progress"></table></div>
-          <h2 style="margin-top:14px">Files on disk</h2>
-          <div class="scroll"><table id="disk"></table></div>
         </div>
       </div>
     </section>
 
-    <section>
-      <h2>Storage engine</h2>
-      <div class="grid" id="engine-stats"></div>
-      <div class="cols" style="margin-top:12px">
+    <section data-tab="MemTables" style="display:none">
+      <div class="cols">
         <div>
-          <h2>MemTable (internal keys, newest version first per key)</h2>
-          <div class="scroll"><table id="memtable"></table></div>
-          <h2 style="margin-top:14px">Immutable MemTable (flushing)</h2>
-          <div class="scroll"><table id="immtable"></table></div>
+          <h2>Active MemTable <span class="hint">(internal keys — MVCC versions visible)</span></h2>
+          <div class="scroll scroll-tall"><table id="memtable"></table></div>
         </div>
         <div>
-          <h2>Levels &amp; SSTables — click a file to open it</h2>
-          <div id="levels"></div>
-          <h2 style="margin-top:14px">SSTable contents <span id="sst-title" class="dim"></span></h2>
-          <div class="scroll"><table id="sst"></table></div>
+          <h2>Immutable MemTable <span class="hint">(frozen, being flushed)</span></h2>
+          <div class="scroll scroll-tall"><table id="immtable"></table></div>
         </div>
+      </div>
+    </section>
+
+    <section data-tab="SSTables" style="display:none">
+      <h2>Levels — click a file to open its full structure</h2>
+      <div id="levels"></div>
+      <div id="sst-view" style="margin-top:14px"></div>
+    </section>
+
+    <section data-tab="Files" style="display:none">
+      <h2>Files on disk <span class="hint">— click any file to decode its contents</span></h2>
+      <div class="cols">
+        <div class="scroll"><table id="disk"></table></div>
+        <div id="file-view"><p class="note">Select a file. Every format is decodable:
+          engine WALs (<span class="kbd">N.log</span>), SSTables (<span class="kbd">N.ldb</span>),
+          <span class="kbd">MANIFEST-N</span>, <span class="kbd">CURRENT</span>, and raft
+          <span class="kbd">log.bin</span> / <span class="kbd">meta.bin</span> /
+          <span class="kbd">snapshot.bin</span>.</p></div>
       </div>
     </section>
   </div>
 </main>
+<div id="toast"></div>
 
 <script>
 "use strict";
-let selected = null;        // selected node's base URL
-let lastStates = {};        // url -> /api/state json
-let timer = null;
-
+let selected = null, lastStates = {}, timer = null, activeTab = "Overview";
+const TABS = ["Overview", "Raft", "MemTables", "SSTables", "Files"];
 const $ = id => document.getElementById(id);
 
 function nodeURLs() {
   return $("nodes").value.split(",").map(s => s.trim()).filter(Boolean)
     .map(s => s.startsWith("http") ? s : "http://" + s);
 }
-
 function cell(tr, text, cls) {
   const td = document.createElement("td");
-  td.textContent = text;
-  if (cls) td.className = cls;
-  tr.appendChild(td);
-  return td;
+  td.textContent = text; if (cls) td.className = cls;
+  tr.appendChild(td); return td;
 }
-
 function headerRow(table, cols) {
   table.textContent = "";
   const tr = document.createElement("tr");
-  for (const c of cols) {
-    const th = document.createElement("th");
-    th.textContent = c;
-    tr.appendChild(th);
-  }
+  for (const c of cols) { const th = document.createElement("th"); th.textContent = c; tr.appendChild(th); }
   table.appendChild(tr);
 }
-
 function fmtBytes(n) {
   if (n == null) return "-";
   if (n < 1024) return n + " B";
   if (n < 1048576) return (n/1024).toFixed(1) + " KB";
-  return (n/1048576).toFixed(1) + " MB";
+  if (n < 1073741824) return (n/1048576).toFixed(1) + " MB";
+  return (n/1073741824).toFixed(2) + " GB";
+}
+function toast(msg, cls) {
+  const d = document.createElement("div");
+  d.className = "t " + (cls || ""); d.textContent = msg;
+  $("toast").appendChild(d);
+  setTimeout(() => d.remove(), 6000);
+}
+function stat(host, k, v, cls) {
+  const d = document.createElement("div"); d.className = "stat";
+  const kk = document.createElement("div"); kk.className = "k"; kk.textContent = k;
+  const vv = document.createElement("div"); vv.className = "v" + (cls ? " " + cls : "");
+  vv.textContent = v;
+  d.appendChild(kk); d.appendChild(vv); host.appendChild(d);
 }
 
 async function fetchState(url) {
@@ -157,11 +249,60 @@ async function fetchState(url) {
   return r.json();
 }
 
+// ---------------- Operations ----------------
+
+async function opRequest(path, body) {
+  // Try the selected node; follow one leader redirect.
+  let url = selected || nodeURLs()[0];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = await fetch(url + path, {method: "POST", body: JSON.stringify(body)});
+    const data = await r.json();
+    if (r.status === 409 && data.leader_debug) {
+      url = "http://" + data.leader_debug;
+      continue;
+    }
+    if (!r.ok) throw new Error(data.error || "HTTP " + r.status);
+    return {data, via: url};
+  }
+  throw new Error("could not find the leader");
+}
+
+async function doOp(op) {
+  const key = $("op-key").value, value = $("op-val").value;
+  if (!key) { toast("key required", "bad"); return; }
+  try {
+    const {data, via} = await opRequest("/api/op", {op, key, value});
+    if (op === "get") {
+      toast(data.found ? `GET ${key} → "${data.value}"` : `GET ${key} → (not found)`,
+            data.found ? "ok" : "bad");
+    } else {
+      toast(`${op.toUpperCase()} ${key} ✓  (committed via ${via.replace("http://","")})`, "ok");
+    }
+    refreshAll();
+  } catch (e) { toast(op + " failed: " + e.message, "bad"); }
+}
+
+async function doLoad(preset) {
+  const n = preset || parseInt($("load-n").value, 10);
+  const vs = parseInt($("load-vs").value, 10) || 100;
+  if (!n || n < 1) { toast("enter a count", "bad"); return; }
+  $("busy").innerHTML = '<span class="spin">◐</span> loading ' + n.toLocaleString() + ' keys…';
+  try {
+    const {data} = await opRequest("/api/load", {n, value_size: vs});
+    toast(`loaded ${data.requested.toLocaleString()} keys in ${data.duration_ms}ms `
+        + `(${data.ops_per_sec.toLocaleString()} ops/s, ${data.failed} failed)`, "ok");
+    refreshAll();
+  } catch (e) { toast("load failed: " + e.message, "bad"); }
+  $("busy").textContent = "";
+}
+
+// ---------------- Cluster & tabs ----------------
+
 async function refreshAll() {
   const urls = nodeURLs();
   const table = $("cluster");
-  headerRow(table, ["inspector", "node", "role", "term", "leader", "commit",
-                    "applied", "last_seq", "memtable", "sstables", "raft log"]);
+  headerRow(table, ["inspector", "node", "role", "term", "leader", "commit", "applied",
+                    "last_seq", "memtable", "sstables", "raft log", "flushes", "compactions"]);
   await Promise.all(urls.map(async url => {
     const tr = document.createElement("tr");
     tr.className = "clickable" + (url === selected ? " sel" : "");
@@ -179,12 +320,14 @@ async function refreshAll() {
       cell(tr, raft.commit_index);
       cell(tr, raft.last_applied);
       cell(tr, eng.last_sequence);
-      cell(tr, eng.memtable.entry_count + " keys / " + fmtBytes(eng.memtable.memory_bytes));
-      cell(tr, sstCount + " files");
-      cell(tr, raft.log_entry_count + " entries (from #" + raft.first_log_index + ")");
+      cell(tr, eng.memtable.entry_count + " / " + fmtBytes(eng.memtable.memory_bytes));
+      cell(tr, sstCount);
+      cell(tr, raft.log_entry_count + " (from #" + raft.first_log_index + ")");
+      cell(tr, eng.stats.memtable_flushes);
+      cell(tr, eng.stats.major_compactions);
     } catch (e) {
       cell(tr, url.replace("http://",""));
-      cell(tr, "unreachable — " + e.message, "err").colSpan = 10;
+      cell(tr, "unreachable — " + e.message, "err").colSpan = 12;
     }
     table.appendChild(tr);
   }));
@@ -192,19 +335,49 @@ async function refreshAll() {
   if (selected && lastStates[selected]) renderDetail(lastStates[selected]);
 }
 
-function stat(host, k, v) {
-  const d = document.createElement("div");
-  d.className = "stat";
-  d.innerHTML = '<div class="k"></div><div class="v"></div>';
-  d.querySelector(".k").textContent = k;
-  d.querySelector(".v").textContent = v;
-  host.appendChild(d);
+function renderTabs() {
+  const bar = $("tabs"); bar.textContent = "";
+  for (const t of TABS) {
+    const d = document.createElement("div");
+    d.className = "tab" + (t === activeTab ? " on" : "");
+    d.textContent = t;
+    d.onclick = () => { activeTab = t; renderTabs(); };
+    bar.appendChild(d);
+  }
+  document.querySelectorAll("[data-tab]").forEach(s => {
+    s.style.display = s.dataset.tab === activeTab ? "" : "none";
+  });
 }
 
-function entryTable(table, mem) {
+// ---------------- Detail rendering ----------------
+
+function gauge(host, label, cur, max, fmt, sublabel) {
+  const pct = max > 0 ? Math.min(100, (cur / max) * 100) : 0;
+  const g = document.createElement("div"); g.className = "gauge";
+  const lbl = document.createElement("div"); lbl.className = "lbl";
+  const l = document.createElement("span"); l.textContent = label;
+  const r = document.createElement("b");
+  r.textContent = fmt(cur) + " / " + fmt(max) + "  (" + pct.toFixed(0) + "%)";
+  lbl.appendChild(l); lbl.appendChild(r);
+  const bar = document.createElement("div"); bar.className = "bar";
+  const fill = document.createElement("i");
+  fill.style.width = pct + "%";
+  if (pct >= 90) fill.className = "hot"; else if (pct >= 60) fill.className = "warn";
+  bar.appendChild(fill); g.appendChild(lbl); g.appendChild(bar);
+  if (sublabel) {
+    const n = document.createElement("div"); n.className = "note"; n.style.marginTop = "3px";
+    n.textContent = sublabel; g.appendChild(n);
+  }
+  host.appendChild(g);
+}
+
+function entryTable(table, mem, capNote) {
   headerRow(table, ["key", "seq", "type", "value"]);
-  if (!mem) { cell(table.appendChild(document.createElement("tr")), "(none)", "dim"); return; }
-  for (const e of mem.entries) {
+  if (!mem) {
+    cell(table.appendChild(document.createElement("tr")), "(none)", "dim");
+    return;
+  }
+  for (const e of mem.entries || []) {
     const tr = document.createElement("tr");
     cell(tr, e.key);
     cell(tr, e.seq, "dim");
@@ -215,114 +388,288 @@ function entryTable(table, mem) {
   }
   if (mem.entries_capped) {
     const tr = document.createElement("tr");
-    cell(tr, "… list capped, " + mem.entry_count + " entries total", "dim").colSpan = 4;
+    cell(tr, "… capped, " + mem.entry_count + " entries total", "dim").colSpan = 4;
     table.appendChild(tr);
   }
 }
 
 function renderDetail(st) {
   $("detail").style.display = "";
+  renderTabs();
   $("d-node").textContent = st.node_id + "  (" + st.listen_addr + ")";
   const raft = st.raft, eng = st.engine;
 
+  // --- Overview ---
+  const ov = $("ov-stats"); ov.textContent = "";
+  stat(ov, "role / term", raft.state + " / " + raft.term,
+       raft.state === "Leader" ? "ok" : "");
+  stat(ov, "commit index", raft.commit_index);
+  stat(ov, "applied (FSM)", raft.last_applied);
+  stat(ov, "engine sequence", eng.last_sequence);
+  stat(ov, "active WAL", eng.active_wal_file + ".log");
+  stat(ov, "block cache", fmtBytes(eng.block_cache.used_bytes) + " / " + fmtBytes(eng.block_cache.capacity_bytes));
+
+  const g = $("gauges"); g.textContent = "";
+  gauge(g, "MemTable fill → flush to L0", eng.memtable.memory_bytes, eng.write_buffer_size,
+        fmtBytes, eng.immutable_memtable ?
+        "an immutable memtable is flushing RIGHT NOW" : null);
+  const l0 = eng.levels.find(l => l.level === 0);
+  gauge(g, "L0 files → L0→L1 compaction", l0.files.length, eng.l0_compaction_trigger,
+        x => x + " files", "writes stall at " + eng.l0_stall_trigger + " files");
+  for (const level of eng.levels) {
+    if (level.level === 0 || (level.total_bytes === 0 && !level.files.length)) continue;
+    gauge(g, "L" + level.level + " size → L" + level.level + "→L" + (level.level+1) + " compaction",
+          level.total_bytes, level.max_bytes, fmtBytes);
+  }
+  gauge(g, "Raft log → snapshot + compaction",
+        raft.last_applied > raft.snapshot_index ? raft.last_applied - raft.snapshot_index : 0,
+        st.snapshot_threshold, x => x + " entries");
+
+  const oc = $("ov-counters"); oc.textContent = "";
+  stat(oc, "memtable flushes", eng.stats.memtable_flushes);
+  stat(oc, "major compactions", eng.stats.major_compactions);
+  stat(oc, "bytes compacted", fmtBytes(eng.stats.compacted_bytes));
+  stat(oc, "write stalls", eng.stats.write_stalls, eng.stats.write_stalls > 0 ? "err" : "");
+  stat(oc, "snapshot through", "#" + raft.snapshot_index);
+  stat(oc, "raft log entries", raft.log_entry_count);
+
+  // --- Raft tab ---
   const rs = $("raft-stats"); rs.textContent = "";
   stat(rs, "role / term", raft.state + " / " + raft.term);
   stat(rs, "voted for", raft.voted_for || "-");
+  stat(rs, "leader", raft.leader_id || "?");
   stat(rs, "commit index", raft.commit_index);
-  stat(rs, "last applied (FSM)", raft.last_applied);
-  stat(rs, "snapshot through", raft.snapshot_index + " (term " + raft.snapshot_term + ")");
+  stat(rs, "last applied", raft.last_applied);
   stat(rs, "log span", "#" + raft.first_log_index + " … #" + raft.last_log_index);
-  stat(rs, "snapshot threshold", st.snapshot_threshold + " entries");
+  stat(rs, "snapshot", "#" + raft.snapshot_index + " (term " + raft.snapshot_term + ")");
 
   const lt = $("raft-log");
   headerRow(lt, ["index", "term", "commands", "bytes"]);
   for (const e of [...st.raft_log_decoded].reverse()) {
     const tr = document.createElement("tr");
     const committed = e.index <= raft.commit_index;
-    cell(tr, "#" + e.index + (committed ? "" : " (uncommitted)"), committed ? "" : "err");
+    cell(tr, "#" + e.index + (committed ? "" : "  ⚠ uncommitted"), committed ? "" : "err");
     cell(tr, e.term, "dim");
-    if (e.noop) cell(tr, "NO-OP (leader election barrier)", "dim");
+    if (e.noop) cell(tr, "NO-OP (election barrier)", "dim");
     else cell(tr, e.ops.map(o =>
         o.op === "PUT" ? "PUT " + o.key + "=" + o.value + (o.value_truncated ? "…" : "")
-                       : "DEL " + o.key).join("  |  "));
+                       : o.op + " " + o.key).join("  |  "));
     cell(tr, e.bytes, "dim");
     lt.appendChild(tr);
   }
 
   const pp = $("peer-progress");
-  headerRow(pp, ["peer", "next index", "match index"]);
+  headerRow(pp, ["peer", "next index", "match index", "lag"]);
   const prog = raft.peer_progress || {};
   for (const id of Object.keys(prog)) {
     const tr = document.createElement("tr");
-    cell(tr, "node " + id);
+    cell(tr, "node " + id + (Number(id) === st.node_id ? " (self)" : ""));
     cell(tr, prog[id].next_index);
     cell(tr, prog[id].match_index);
+    const lag = raft.last_log_index - prog[id].match_index;
+    cell(tr, lag === 0 ? "up to date" : lag + " behind", lag === 0 ? "ok" : "err");
     pp.appendChild(tr);
   }
   if (!Object.keys(prog).length) {
     cell(pp.appendChild(document.createElement("tr")), "(not the leader)", "dim");
   }
 
-  const dt = $("disk");
-  headerRow(dt, ["dir", "file", "size"]);
-  for (const f of st.disk || []) {
-    const tr = document.createElement("tr");
-    cell(tr, f.dir, "dim"); cell(tr, f.name); cell(tr, fmtBytes(f.size));
-    dt.appendChild(tr);
-  }
-
-  const es = $("engine-stats"); es.textContent = "";
-  stat(es, "last sequence", eng.last_sequence);
-  stat(es, "active WAL file", eng.active_wal_file + ".log");
-  stat(es, "memtable", eng.memtable.entry_count + " entries / " + fmtBytes(eng.memtable.memory_bytes));
-  stat(es, "write buffer", fmtBytes(eng.write_buffer_size));
-  stat(es, "block cache", fmtBytes(eng.block_cache.used_bytes) + " / " + fmtBytes(eng.block_cache.capacity_bytes));
-  stat(es, "L0 trigger", eng.l0_compaction_trigger + " files");
-
+  // --- MemTables tab ---
   entryTable($("memtable"), eng.memtable);
   entryTable($("immtable"), eng.immutable_memtable);
 
+  // --- SSTables tab ---
   const lv = $("levels"); lv.textContent = "";
   for (const level of eng.levels) {
-    if (!level.files.length && level.level > 0) continue;
+    if (!level.files.length && level.level > 1) continue;
     const div = document.createElement("div");
-    const label = document.createElement("span");
-    label.className = "dim";
-    label.textContent = "L" + level.level + " (" + fmtBytes(level.total_bytes) + "): ";
+    const label = document.createElement("span"); label.className = "dim";
+    label.textContent = "L" + level.level + " — " + level.files.length + " files, "
+      + fmtBytes(level.total_bytes)
+      + (level.level > 0 ? " (budget " + fmtBytes(level.max_bytes) + "): " : ": ");
     div.appendChild(label);
     if (!level.files.length) {
       const s = document.createElement("span"); s.className = "dim"; s.textContent = "empty";
       div.appendChild(s);
     }
     for (const f of level.files) {
-      const pill = document.createElement("span");
-      pill.className = "pill";
-      pill.textContent = f.number + ".ldb  " + fmtBytes(f.size_bytes) +
-        "  [" + f.smallest_key + " … " + f.largest_key + "]";
-      pill.onclick = () => openSST(f.number, pill);
+      const pill = document.createElement("span"); pill.className = "pill";
+      pill.textContent = f.number + ".ldb  " + fmtBytes(f.size_bytes)
+        + "  [" + f.smallest_key.slice(0, 24) + " … " + f.largest_key.slice(0, 24) + "]";
+      pill.onclick = () => openFile("engine", f.number + ".ldb", $("sst-view"), pill);
       div.appendChild(pill);
     }
     lv.appendChild(div);
   }
-}
 
-async function openSST(fileNumber, pill) {
-  document.querySelectorAll(".pill.open").forEach(p => p.classList.remove("open"));
-  pill.classList.add("open");
-  $("sst-title").textContent = "— " + fileNumber + ".ldb";
-  const table = $("sst");
-  headerRow(table, ["key", "seq", "type", "value"]);
-  try {
-    const r = await fetch(selected + "/api/sst?file=" + fileNumber, {cache: "no-store"});
-    const data = await r.json();
-    if (data.error) throw new Error(data.error);
-    entryTable(table, data);
-  } catch (e) {
-    cell(table.appendChild(document.createElement("tr")), "error: " + e.message, "err");
+  // --- Files tab ---
+  const dt = $("disk");
+  headerRow(dt, ["dir", "file", "size", ""]);
+  for (const f of st.disk || []) {
+    const tr = document.createElement("tr"); tr.className = "clickable";
+    tr.onclick = () => openFile(f.dir, f.name, $("file-view"));
+    cell(tr, f.dir, "dim");
+    cell(tr, f.name, "file-link");
+    cell(tr, fmtBytes(f.size));
+    cell(tr, "decode ▸", "dim");
+    dt.appendChild(tr);
   }
 }
 
-// Boot: same-origin node first, then peers from its hint.
+// ---------------- File viewer ----------------
+
+function vh2(host, text) {
+  const h = document.createElement("h2"); h.textContent = text; host.appendChild(h);
+}
+function vtable(host, tall) {
+  const wrap = document.createElement("div");
+  wrap.className = "scroll" + (tall ? " scroll-tall" : "");
+  const t = document.createElement("table");
+  wrap.appendChild(t); host.appendChild(wrap); return t;
+}
+
+async function openFile(dir, name, host, pill) {
+  if (pill) {
+    document.querySelectorAll(".pill.open").forEach(p => p.classList.remove("open"));
+    pill.classList.add("open");
+  }
+  host.textContent = "";
+  vh2(host, "⏳ decoding " + dir + "/" + name + " …");
+  try {
+    const r = await fetch(selected + "/api/file?dir=" + dir + "&name=" + encodeURIComponent(name),
+                          {cache: "no-store"});
+    const body = await r.json();
+    if (body.error) throw new Error(body.error);
+    host.textContent = "";
+    renderFile(host, dir + "/" + name, body.kind, body.data);
+  } catch (e) {
+    host.textContent = "";
+    vh2(host, dir + "/" + name);
+    const p = document.createElement("p"); p.className = "err";
+    p.textContent = "cannot decode: " + e.message; host.appendChild(p);
+  }
+}
+
+function renderFile(host, title, kind, d) {
+  vh2(host, title + " — " + kind.replace("_", " "));
+  const grid = document.createElement("div"); grid.className = "grid";
+  host.appendChild(grid);
+
+  if (kind === "sstable") {
+    stat(grid, "file size", fmtBytes(d.file_size));
+    stat(grid, "entries", d.entry_count);
+    stat(grid, "data blocks", d.block_count + " (" + fmtBytes(d.data_bytes) + ")");
+    if (d.bloom && d.bloom.bits) {
+      stat(grid, "bloom filter", fmtBytes(d.bloom.size_bytes) + ", k=" + d.bloom.hash_probes_k);
+      stat(grid, "bloom fill", (d.bloom.fill_ratio * 100).toFixed(1) + "% of " + d.bloom.bits + " bits");
+      stat(grid, "est. false-positive rate", (d.bloom.est_false_positive_rate * 100).toFixed(3) + "%");
+    }
+    vh2(host, "Data blocks (prefix-compressed, ~4KB each)");
+    const bt = vtable(host);
+    headerRow(bt, ["offset", "size", "entries", "first key", "last key"]);
+    for (const b of d.blocks) {
+      const tr = document.createElement("tr");
+      cell(tr, b.offset, "dim"); cell(tr, fmtBytes(b.size)); cell(tr, b.entries);
+      cell(tr, b.first_key); cell(tr, b.last_key);
+      bt.appendChild(tr);
+    }
+    vh2(host, "Entries (internal keys)");
+    entryTable(vtable(host, true), d);
+
+  } else if (kind === "wal") {
+    stat(grid, "file size", fmtBytes(d.file_size));
+    stat(grid, "records (write batches)", d.record_count);
+    vh2(host, "Records — each is one atomic write batch: [seq][op count][ops], CRC32C-framed");
+    const t = vtable(host, true);
+    headerRow(t, ["seq", "ops", "bytes", "commands"]);
+    for (const rec of d.records) {
+      const tr = document.createElement("tr");
+      if (rec.unparseable) { cell(tr, "corrupt/unknown record", "err").colSpan = 4; }
+      else {
+        cell(tr, rec.seq);
+        cell(tr, rec.op_count, "dim");
+        cell(tr, rec.bytes, "dim");
+        cell(tr, rec.ops.map(o =>
+          o.op === "PUT" ? "PUT " + o.key + "=" + o.value + (o.value_truncated ? "…" : "")
+                         : o.op + " " + o.key).join("  |  "));
+      }
+      t.appendChild(tr);
+    }
+    if (d.records_capped) {
+      const p = document.createElement("p"); p.className = "note";
+      p.textContent = "listing capped; " + d.record_count + " records total";
+      host.appendChild(p);
+    }
+
+  } else if (kind === "manifest") {
+    stat(grid, "edits (VersionEdits)", d.edit_count);
+    vh2(host, "VersionEdits — the engine's file-level state changes, in order");
+    const t = vtable(host, true);
+    headerRow(t, ["#", "counters", "added files", "deleted files"]);
+    d.edits.forEach((e, i) => {
+      const tr = document.createElement("tr");
+      cell(tr, i, "dim");
+      const counters = [];
+      if (e.log_number != null) counters.push("wal_boundary=" + e.log_number);
+      if (e.next_file_number != null) counters.push("next_file=" + e.next_file_number);
+      if (e.last_sequence != null) counters.push("last_seq=" + e.last_sequence);
+      cell(tr, counters.join("  "), "dim");
+      cell(tr, (e.added_files || []).map(f =>
+        "L" + f.level + "/" + f.number + ".ldb (" + fmtBytes(f.size_bytes)
+        + ", " + f.smallest.key + "…" + f.largest.key + ")").join("  |  ") || "-", "ok");
+      cell(tr, (e.deleted_files || []).map(f => "L" + f.level + "/" + f.number + ".ldb").join("  ") || "-", "err");
+      t.appendChild(tr);
+    });
+
+  } else if (kind === "current") {
+    stat(grid, "content", d.content);
+    const p = document.createElement("p"); p.className = "note";
+    p.textContent = "CURRENT names the live manifest; it is replaced atomically (tmp + fsync + rename) so recovery always finds a complete manifest.";
+    host.appendChild(p);
+
+  } else if (kind === "raft_meta") {
+    stat(grid, "current term", d.term);
+    stat(grid, "voted for", d.voted_for || "-");
+    stat(grid, "snapshot index", d.snapshot_index);
+    stat(grid, "snapshot term", d.snapshot_term);
+    const p = document.createElement("p"); p.className = "note";
+    p.textContent = "Rewritten atomically whenever the term, vote, or snapshot markers change — Raft's safety depends on this surviving a crash before any RPC reply.";
+    host.appendChild(p);
+
+  } else if (kind === "raft_log") {
+    stat(grid, "entries", d.entry_count);
+    vh2(host, "Entries — CRC-framed, append-only (torn tails dropped on load)");
+    const t = vtable(host, true);
+    headerRow(t, ["index", "term", "commands", "bytes"]);
+    for (const e of [...d.entries].reverse()) {
+      const tr = document.createElement("tr");
+      cell(tr, "#" + e.index);
+      cell(tr, e.term, "dim");
+      if (e.noop) cell(tr, "NO-OP", "dim");
+      else cell(tr, e.ops.map(o =>
+        o.op === "PUT" ? "PUT " + o.key + "=" + o.value + (o.value_truncated ? "…" : "")
+                       : o.op + " " + o.key).join("  |  "));
+      cell(tr, e.bytes, "dim");
+      t.appendChild(tr);
+    }
+
+  } else if (kind === "raft_snapshot") {
+    stat(grid, "applied through", "#" + d.applied_index);
+    stat(grid, "key-value pairs", d.pair_count);
+    stat(grid, "total size", fmtBytes(d.total_bytes));
+    vh2(host, "Sample pairs (first " + d.sample_pairs.length + ")");
+    const t = vtable(host, true);
+    headerRow(t, ["key", "value"]);
+    for (const p of d.sample_pairs) {
+      const tr = document.createElement("tr");
+      cell(tr, p.key); cell(tr, p.value);
+      t.appendChild(tr);
+    }
+  }
+}
+
+// ---------------- Boot ----------------
+
 (async function init() {
   const self = location.origin;
   $("nodes").value = self.replace("http://","");

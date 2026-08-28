@@ -375,13 +375,14 @@ func TestInspectorEndpoints(t *testing.T) {
 	addrs := freePorts(t, 2)
 	peers := map[uint64]string{1: addrs[0]}
 	node, err := NewNode(Config{
-		ID:            1,
-		ListenAddr:    addrs[0],
-		DebugAddr:     addrs[1],
-		Peers:         peers,
-		DataDir:       t.TempDir(),
-		EngineOptions: &engine.Options{WriteBufferSize: 1 << 20},
-		Logger:        log.New(os.Stderr, "[inspect] ", 0),
+		ID:                1,
+		ListenAddr:        addrs[0],
+		DebugAddr:         addrs[1],
+		Peers:             peers,
+		DataDir:           t.TempDir(),
+		SnapshotThreshold: 50, // force a raft snapshot so its viewer is testable
+		EngineOptions:     &engine.Options{WriteBufferSize: 16 * 1024},
+		Logger:            log.New(os.Stderr, "[inspect] ", 0),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -472,6 +473,85 @@ func TestInspectorEndpoints(t *testing.T) {
 	resp3.Body.Close()
 	if !bytes.Contains(body, []byte("LakeStore Inspector")) {
 		t.Fatal("inspector HTML not served")
+	}
+
+	base := "http://" + node.DebugAddr()
+	postJSON := func(path string, payload string) (int, map[string]any) {
+		resp, err := http.Post(base+path, "application/json", bytes.NewBufferString(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+	getJSON := func(path string) (int, map[string]any) {
+		resp, err := http.Get(base + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+
+	// Single ops through the debug server hit the normal pipeline.
+	if code, out := postJSON("/api/op", `{"op":"put","key":"dbg","value":"v1"}`); code != 200 || out["ok"] != true {
+		t.Fatalf("op put failed: %d %v", code, out)
+	}
+	if code, out := postJSON("/api/op", `{"op":"get","key":"dbg"}`); code != 200 || out["found"] != true || out["value"] != "v1" {
+		t.Fatalf("op get failed: %d %v", code, out)
+	}
+	if code, out := postJSON("/api/op", `{"op":"del","key":"dbg"}`); code != 200 || out["ok"] != true {
+		t.Fatalf("op del failed: %d %v", code, out)
+	}
+
+	// Load generator: enough entries to cross the snapshot threshold and
+	// (with the tiny write buffer) force at least one memtable flush.
+	if code, out := postJSON("/api/load", `{"n":300,"value_size":200}`); code != 200 || out["ok"] != true {
+		t.Fatalf("load failed: %d %v", code, out)
+	}
+
+	// File viewers: engine WAL, SSTable, MANIFEST, CURRENT, raft files.
+	code, st2 := getJSON("/api/state")
+	if code != 200 {
+		t.Fatalf("state after load: %d", code)
+	}
+	stillOnDisk := func(dir, name string) bool {
+		_, cur := getJSON("/api/state")
+		for _, f := range cur["disk"].([]any) {
+			file := f.(map[string]any)
+			if file["dir"] == dir && file["name"] == name {
+				return true
+			}
+		}
+		return false
+	}
+	sawKinds := map[string]bool{}
+	for _, f := range st2["disk"].([]any) {
+		file := f.(map[string]any)
+		dir, name := file["dir"].(string), file["name"].(string)
+		code, out := getJSON("/api/file?dir=" + dir + "&name=" + name)
+		if code != 200 {
+			// Background compaction may delete a file between the listing
+			// and the dump — that's fine; anything else is a bug.
+			if code == 404 && !stillOnDisk(dir, name) {
+				continue
+			}
+			t.Fatalf("file dump %s/%s: HTTP %d %v", dir, name, code, out)
+		}
+		kind, _ := out["kind"].(string)
+		if kind == "" {
+			t.Fatalf("file dump %s/%s: no kind in %v", dir, name, out)
+		}
+		sawKinds[kind] = true
+	}
+	for _, want := range []string{"wal", "sstable", "manifest", "current", "raft_log", "raft_meta", "raft_snapshot"} {
+		if !sawKinds[want] {
+			t.Fatalf("no file of kind %q was decodable (saw %v)", want, sawKinds)
+		}
 	}
 }
 

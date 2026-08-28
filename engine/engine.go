@@ -240,13 +240,42 @@ func (db *DB) DebugJSON() (string, error) {
 	return C.GoString(cjson), nil
 }
 
-// DebugSSTableJSON lists the decoded entries of one SSTable as JSON.
+// DebugSSTableJSON lists the decoded entries + physical structure (blocks,
+// index, bloom filter statistics) of one SSTable as JSON.
 func (db *DB) DebugSSTableJSON(fileNumber uint64) (string, error) {
 	if db.ptr == nil {
 		return "", ErrClosed
 	}
 	var cjson *C.char
 	cerr := C.lakestore_debug_sst_json(db.ptr, C.uint64_t(fileNumber), &cjson)
+	if err := toErr(cerr); err != nil {
+		return "", err
+	}
+	defer C.lakestore_free(unsafe.Pointer(cjson))
+	return C.GoString(cjson), nil
+}
+
+// DebugWALJSON decodes the records of one WAL file (N.log) as JSON.
+func (db *DB) DebugWALJSON(fileNumber uint64) (string, error) {
+	if db.ptr == nil {
+		return "", ErrClosed
+	}
+	var cjson *C.char
+	cerr := C.lakestore_debug_wal_json(db.ptr, C.uint64_t(fileNumber), &cjson)
+	if err := toErr(cerr); err != nil {
+		return "", err
+	}
+	defer C.lakestore_free(unsafe.Pointer(cjson))
+	return C.GoString(cjson), nil
+}
+
+// DebugManifestJSON decodes the VersionEdits of one MANIFEST-N file as JSON.
+func (db *DB) DebugManifestJSON(fileNumber uint64) (string, error) {
+	if db.ptr == nil {
+		return "", ErrClosed
+	}
+	var cjson *C.char
+	cerr := C.lakestore_debug_manifest_json(db.ptr, C.uint64_t(fileNumber), &cjson)
 	if err := toErr(cerr); err != nil {
 		return "", err
 	}

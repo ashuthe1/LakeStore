@@ -160,6 +160,7 @@ Status DBImpl::Recover() {
 }
 
 Status DBImpl::MakeRoomForWrite(std::unique_lock<std::mutex>& lock) {
+    bool counted_stall = false;
     while (true) {
         if (!bg_error_.ok()) return bg_error_;
 
@@ -169,11 +170,19 @@ Status DBImpl::MakeRoomForWrite(std::unique_lock<std::mutex>& lock) {
         if (imm_ != nullptr) {
             // Previous memtable still flushing — wait for the background
             // thread to finish before rotating again.
+            if (!counted_stall) {
+                stat_write_stalls_.fetch_add(1, std::memory_order_relaxed);
+                counted_stall = true;
+            }
             bg_cv_.wait(lock);
             continue;
         }
         if (static_cast<int>(current_version_->Files(0).size()) >= options_.l0_stall_trigger) {
             // Too many L0 files: stall writes until compaction catches up.
+            if (!counted_stall) {
+                stat_write_stalls_.fetch_add(1, std::memory_order_relaxed);
+                counted_stall = true;
+            }
             bg_cv_.wait(lock);
             continue;
         }
@@ -377,6 +386,7 @@ Status DBImpl::CompactMemTable(std::unique_lock<std::mutex>& lock) {
     if (s.ok()) {
         imm_ = nullptr;
         imm_log_file_number_ = 0;
+        stat_flushes_.fetch_add(1, std::memory_order_relaxed);
         RemoveObsoleteFiles();
     }
     return s;
@@ -486,6 +496,14 @@ Status DBImpl::DoMajorCompaction(std::unique_lock<std::mutex>& lock, int level) 
         s = manifest_->LogAndApply(compaction.edit(), &current_version_);
     }
     if (s.ok()) {
+        stat_major_compactions_.fetch_add(1, std::memory_order_relaxed);
+        uint64_t input_bytes = 0;
+        for (int which = 0; which < 2; which++) {
+            for (const FileMetaData& f : compaction.inputs(which)) {
+                input_bytes += f.file_size;
+            }
+        }
+        stat_compacted_bytes_.fetch_add(input_bytes, std::memory_order_relaxed);
         RemoveObsoleteFiles();
     } else {
         // Clean up any orphaned outputs; the edit was never applied.

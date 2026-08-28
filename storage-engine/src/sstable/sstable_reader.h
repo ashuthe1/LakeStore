@@ -44,6 +44,11 @@ public:
     uint64_t FileSize() const { return file_size_; }
     uint64_t FileNumber() const { return file_number_; }
 
+    // Read-only introspection: physical structure (data blocks, index,
+    // bloom filter statistics) plus up to max_entries decoded entries.
+    // Bypasses the block cache entirely.
+    Status DebugJSON(std::string* out, size_t max_entries) const;
+
 private:
     friend class TableIterator;
     SSTableReader() = default;

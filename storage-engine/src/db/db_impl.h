@@ -50,8 +50,13 @@ public:
     // (memtables, levels, caches) as JSON for the inspector UI. Uses the
     // same snapshot pinning as reads; never disturbs the data path.
     void DebugJSON(std::string* out);
-    // Lists the (decoded) entries of one SSTable, bypassing the block cache.
+    // Lists the (decoded) entries + physical structure of one SSTable,
+    // bypassing the block cache.
     Status DebugSSTableJSON(uint64_t file_number, std::string* out);
+    // Decodes the records of one WAL file (write batches with sequences).
+    Status DebugWALJSON(uint64_t file_number, std::string* out);
+    // Decodes the VersionEdit records of one MANIFEST file.
+    Status DebugManifestJSON(uint64_t file_number, std::string* out);
 
     // Encode/decode a WriteBatch to/from a WAL record:
     // [fixed64 sequence][fixed32 op_count][ops payload]
@@ -107,6 +112,12 @@ private:
     std::atomic<SequenceNumber> last_sequence_{0};
     uint64_t log_file_number_ = 0;     // log backing mem_
     uint64_t imm_log_file_number_ = 0; // log backing imm_ (obsolete after flush)
+
+    // Lifetime statistics (inspector); relaxed atomics, zero hot-path cost.
+    std::atomic<uint64_t> stat_flushes_{0};
+    std::atomic<uint64_t> stat_major_compactions_{0};
+    std::atomic<uint64_t> stat_write_stalls_{0};
+    std::atomic<uint64_t> stat_compacted_bytes_{0};
 };
 
 } // namespace lakestore

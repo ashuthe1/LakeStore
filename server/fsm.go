@@ -148,12 +148,52 @@ func (f *FSM) DebugEngineJSON() (string, error) {
 	return db.DebugJSON()
 }
 
-// DebugSSTableJSON dumps one SSTable's entries as JSON (inspector UI).
+// DebugSSTableJSON dumps one SSTable's entries + structure (inspector UI).
 func (f *FSM) DebugSSTableJSON(fileNumber uint64) (string, error) {
 	f.mu.Lock()
 	db := f.db
 	f.mu.Unlock()
 	return db.DebugSSTableJSON(fileNumber)
+}
+
+// DebugWALJSON decodes one engine WAL file (inspector UI).
+func (f *FSM) DebugWALJSON(fileNumber uint64) (string, error) {
+	f.mu.Lock()
+	db := f.db
+	f.mu.Unlock()
+	return db.DebugWALJSON(fileNumber)
+}
+
+// DebugManifestJSON decodes one MANIFEST file (inspector UI).
+func (f *FSM) DebugManifestJSON(fileNumber uint64) (string, error) {
+	f.mu.Lock()
+	db := f.db
+	f.mu.Unlock()
+	return db.DebugManifestJSON(fileNumber)
+}
+
+// DecodeSnapshotForDebug summarizes a raft snapshot blob (inspector UI).
+func DecodeSnapshotForDebug(data []byte, samplePairs int) (map[string]any, error) {
+	var payload snapshotPayload
+	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&payload); err != nil {
+		return nil, err
+	}
+	sample := make([]map[string]string, 0, samplePairs)
+	for i, kv := range payload.Pairs {
+		if i >= samplePairs {
+			break
+		}
+		v := kv[1]
+		if len(v) > 128 {
+			v = v[:128]
+		}
+		sample = append(sample, map[string]string{"key": string(kv[0]), "value": string(v)})
+	}
+	return map[string]any{
+		"applied_index": payload.AppliedIndex,
+		"pair_count":    len(payload.Pairs),
+		"sample_pairs":  sample,
+	}, nil
 }
 
 // --- Snapshots ---

@@ -1,10 +1,12 @@
 #include "sstable_reader.h"
 #include "sstable_writer.h" // for kFooterSize / kTableMagicNumber
 #include "../util/coding.h"
+#include "../util/json_builder.h"
 #include "../cache/lru_cache.h"
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <cmath>
 #include <cstring>
 #include <memory>
 
@@ -150,6 +152,140 @@ Status SSTableReader::Get(const ReadOptions& opts, const Slice& internal_key,
 
 lakestore::Iterator* SSTableReader::NewIterator(const ReadOptions& opts) const {
     return new TableIterator(this, nullptr, opts);
+}
+
+namespace {
+// One decoded internal entry for the inspector.
+void AppendEntryJSON(std::string* out, const Slice& encoded_key, const Slice& value) {
+    constexpr size_t kMaxValuePreview = 128;
+    InternalKey ik = InternalKey::Decode(encoded_key);
+    out->append("{");
+    json::KVStr(out, "key", Slice(ik.user_key));
+    out->append(",");
+    json::KV(out, "seq", ik.seq);
+    out->append(",\"type\":\"");
+    out->append(ik.type == kTypeValue ? "PUT" : "DEL");
+    out->append("\",");
+    json::KV(out, "value_len", value.size);
+    out->append(",");
+    Slice preview(value.data, value.size < kMaxValuePreview ? value.size : kMaxValuePreview);
+    json::KVStr(out, "value", preview);
+    if (value.size > kMaxValuePreview) {
+        out->append(",\"value_truncated\":true");
+    }
+    out->append("}");
+}
+} // namespace
+
+Status SSTableReader::DebugJSON(std::string* out, size_t max_entries) const {
+    constexpr size_t kMaxBlocksListed = 500;
+    ReadOptions no_cache; // never pollute the cache from the inspector
+    no_cache.block_cache = nullptr;
+    no_cache.fill_cache = false;
+
+    out->clear();
+    out->append("{");
+    json::KV(out, "file_number", file_number_);
+    out->append(",");
+    json::KV(out, "file_size", file_size_);
+
+    // --- Bloom filter statistics ---
+    out->append(",\"bloom\":{");
+    if (!filter_data_.empty()) {
+        size_t bytes = filter_data_.size();
+        int k = static_cast<uint8_t>(filter_data_[bytes - 1]);
+        size_t bits = (bytes - 1) * 8;
+        size_t set = 0;
+        for (size_t i = 0; i + 1 < bytes; i++) {
+            set += __builtin_popcount(static_cast<uint8_t>(filter_data_[i]));
+        }
+        double fill = bits > 0 ? static_cast<double>(set) / bits : 0.0;
+        json::KV(out, "size_bytes", bytes);
+        out->append(",");
+        json::KV(out, "bits", bits);
+        out->append(",");
+        json::KV(out, "bits_set", set);
+        out->append(",");
+        json::KV(out, "hash_probes_k", k);
+        out->append(",");
+        json::KVDouble(out, "fill_ratio", fill);
+        out->append(",");
+        // A lookup false-positives only if all k probed bits are set.
+        json::KVDouble(out, "est_false_positive_rate", std::pow(fill, k));
+    } else {
+        json::KV(out, "size_bytes", 0);
+    }
+    out->append("}");
+
+    // --- Data block map (via the index block) ---
+    out->append(",\"blocks\":[");
+    size_t block_count = 0;
+    uint64_t data_bytes = 0;
+    {
+        std::unique_ptr<lakestore::Iterator> iiter(index_block_->NewIterator());
+        for (iiter->SeekToFirst(); iiter->Valid(); iiter->Next()) {
+            Slice handle_val = iiter->value();
+            uint64_t offset, size;
+            if (!GetVarint64(&handle_val, &offset) || !GetVarint64(&handle_val, &size)) {
+                break;
+            }
+            data_bytes += size;
+            if (block_count < kMaxBlocksListed) {
+                if (block_count > 0) out->append(",");
+                // Read the block (uncached) for its first key + entry count.
+                std::string first_key;
+                size_t entries = 0;
+                Block* raw = nullptr;
+                if (ReadBlock(offset, size, &raw).ok()) {
+                    std::unique_ptr<lakestore::Iterator> diter(raw->NewIterator());
+                    for (diter->SeekToFirst(); diter->Valid(); diter->Next()) {
+                        if (entries == 0) {
+                            first_key = ExtractUserKey(diter->key()).ToString();
+                        }
+                        entries++;
+                    }
+                    delete raw;
+                }
+                InternalKey last = InternalKey::Decode(iiter->key());
+                out->append("{");
+                json::KV(out, "offset", offset);
+                out->append(",");
+                json::KV(out, "size", size);
+                out->append(",");
+                json::KV(out, "entries", entries);
+                out->append(",");
+                json::KVStr(out, "first_key", Slice(first_key));
+                out->append(",");
+                json::KVStr(out, "last_key", Slice(last.user_key));
+                out->append("}");
+            }
+            block_count++;
+        }
+    }
+    out->append("],");
+    json::KV(out, "block_count", block_count);
+    out->append(",");
+    json::KVBool(out, "blocks_capped", block_count > kMaxBlocksListed);
+    out->append(",");
+    json::KV(out, "data_bytes", data_bytes);
+
+    // --- Decoded entries ---
+    out->append(",\"entries\":[");
+    size_t count = 0;
+    std::unique_ptr<lakestore::Iterator> it(NewIterator(no_cache));
+    for (it->SeekToFirst(); it->Valid(); it->Next()) {
+        if (count < max_entries) {
+            if (count > 0) out->append(",");
+            AppendEntryJSON(out, it->key(), it->value());
+        }
+        count++;
+    }
+    out->append("],");
+    json::KV(out, "entry_count", count);
+    out->append(",");
+    json::KVBool(out, "entries_capped", count > max_entries);
+    out->append("}");
+    return Status::OK();
 }
 
 // --- TableIterator ---
