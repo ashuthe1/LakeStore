@@ -1,93 +1,147 @@
-Lakestore 
-Plan 
-— Phase 1: LSM-Tree Storage Engine
-— Phase 2: Raft
-— Phase 3: Connecting the 2 layers
+# LakeStore
 
+A distributed key-value store built from scratch: a **LevelDB-style LSM-tree
+storage engine in C++17** underneath a **from-scratch Raft consensus layer in
+Go**, exposed as a replicated KV service over **gRPC** with a CLI client.
 
-## 1. Core Components Implemented
+```
+                        ┌─────────────┐
+              lakectl → │  gRPC (KV)  │  Put / Get / Delete / Scan / Status
+                        └──────┬──────┘
+   ┌───────────────────────────┼───────────────────────────────┐
+   │ lakestored (node 1)       │ node 2            node 3      │
+   │  ┌──────────────┐   Raft RPCs (gRPC)   ┌──────────────┐   │
+   │  │  Raft (Go)   │◄────────────────────►│  Raft (Go)   │…  │
+   │  │ election ·   │                      └──────────────┘   │
+   │  │ replication ·│  committed entries                      │
+   │  │ snapshots    ├────────────┐                            │
+   │  └──────────────┘            ▼                            │
+   │                     ┌────────────────┐                    │
+   │                     │  FSM (cgo)     │                    │
+   │                     │ ┌────────────┐ │                    │
+   │                     │ │ LakeStore  │ │  C++ LSM engine:   │
+   │                     │ │ engine C++ │ │  WAL · MemTable ·  │
+   │                     │ └────────────┘ │  SSTables · Levels │
+   │                     └────────────────┘                    │
+   └───────────────────────────────────────────────────────────┘
+```
 
-### 1.1 MemTable & SkipList
-- **Lock-Free Reads / Serialized Writes:** The core memory structure is a custom SkipList. It allows fast, lock-free concurrent reads while writes are serialized under a mutex to prevent circular pointer corruption.
-- **Custom Memory Allocation:** Uses placement-new and byte-aligned memory allocation for SkipList nodes to maximize CPU cache locality and prevent memory fragmentation.
-- **Internal Keys:** User keys are wrapped into `InternalKey` structures containing the user string, a 64-bit Sequence Number, and a 1-byte Operation Type (Put/Delete). This enables Multi-Version Concurrency Control (MVCC) and point-in-time reads.
+**New to the project?** The [`docs/`](docs/) directory has a four-part
+deep-dive written for readers starting from zero: [the big picture](docs/01-overview.md) →
+[the storage engine](docs/02-storage-engine.md) → [Raft](docs/03-raft.md) →
+[the distributed KV layer](docs/04-distributed-kv.md).
 
-### 1.2 Write-Ahead Log (WAL)
-- **Binary Persistence:** Before any data is placed in RAM, it is sequentially appended to a `.log` file on disk.
-- **Custom Encoding:** Operations are tightly packed using Varint-32 encoding for lengths to save disk space and maximize I/O throughput.
-- **Batching:** Multiple operations can be grouped into a `WriteBatch` with a single sequence number block and atomic disk flush.
+## Components
 
-### 1.3 Concurrency & Thread Safety
-- **State Mutex:** A central `std::mutex` and `std::condition_variable` govern the engine state.
-- **Immutable Rotation:** When the active MemTable exceeds its size threshold (64MB), it is rotated to a read-only `Immutable MemTable` (`imm_`) while a background thread is signaled to flush it to disk. 
+| Layer | Language | What it does |
+|---|---|---|
+| [`storage-engine/`](storage-engine/) | C++17 | LSM-tree: WAL with group commit, lock-free-read SkipList memtable, SSTables with bloom filters + block cache, leveled compaction, MVCC snapshots, MANIFEST recovery |
+| [`raft/`](raft/) | Go | Raft consensus from scratch: leader election, log replication, append-only durable log, snapshot-based log compaction, InstallSnapshot for lagging followers |
+| [`engine/`](engine/) | Go (cgo) | Go binding over the engine's C API |
+| [`server/`](server/) | Go | Replicated state machine: batched proposals, linearizable reads, snapshot/restore, gRPC services |
+| [`client/`](client/), [`cmd/lakectl`](cmd/lakectl/) | Go | Leader-following client library and CLI |
+| [`cmd/lakestored`](cmd/lakestored/) | Go | The server daemon |
 
-### 1.4 Binary Parsers & Utilities
-- **Slice:** A lightweight pointer+length struct used to pass string data around without triggering deep copies.
-- **Coding Helpers:** Safe `GetVarint32` and `PutVarint32` functions with strict bounds-checking to prevent segmentation faults when reading corrupted data.
+## Quick start
 
-### 1.5 Testing & Tooling
-- **Google Test Suite:** 20 comprehensive unit tests covering CRUD ops, MVCC, durability, recovery, thread-safety, and iterators.
-- **Google Benchmark:** Integrated micro-benchmarking suite to measure raw throughput of Sequential Writes, Random Writes, and Random Reads.
-
----
-
-## 2. Data Flow & Lifecycle
-
-### 2.1 The Write Path (Memory)
-When a user calls `db->Put("key", "value")`:
-1. **Batch Creation:** The operation is added to a `WriteBatch`.
-2. **Lock Acquisition:** The engine acquires the main `mutex_`. If an immutable MemTable is currently stalling the system waiting for a disk flush, the thread waits.
-3. **Sequence Assignment:** The engine calculates the number of operations in the batch and fetches the next available 64-bit Sequence Number.
-4. **WAL Append:** The batch payload (`[Seq][OpCount][Type][KeyLen][Key][ValLen][Val]`) is written to the `.log` file. (If `sync=true`, a physical `fdatasync` is called).
-5. **MemTable Insertion:** The payload is parsed, and each operation is inserted into the SkipList with its unique sequence number.
-6. **Threshold Check:** If the MemTable exceeds 64MB, it is frozen, a new one is allocated, and a background compaction is scheduled.
-7. **Unlock:** The mutex is released, and `Status::OK()` is returned.
-
-### 2.2 The Read Path
-When a user calls `db->Get("key")`:
-1. The engine constructs a lookup key containing the user's key and the *maximum possible sequence number* (to ensure the latest version is read).
-2. It queries the active **MemTable**.
-3. If not found, it queries the **Immutable MemTable** (if one exists).
-4. *(Phase 2 scope)* If not found, it checks the Bloom Filters of on-disk **SSTables** (Level 0 downwards) and reads the data block if a match is found.
-
-### 2.3 Deletions (Tombstones)
-Deletions are handled as "Writes". Calling `db->Delete("key")` inserts a new entry into the MemTable with the `kTypeDeletion` flag (a Tombstone). During a read, if the engine encounters a Tombstone for a key before finding the actual value, it immediately returns `NotFound`.
-
-### 2.4 System Crash & Recovery
-If the system crashes (or restarts normally):
-1. `DBImpl::Open` is called.
-2. The `MANIFEST` file is read to determine the current database state and valid file numbers.
-3. A new, empty MemTable is allocated.
-4. The system scans the directory for `.log` files, sorts them by ID, and sequentially reads the binary payloads.
-5. The `DecodeAndInsert` pipeline replays every single operation back into the MemTable, perfectly restoring the state of the database to the exact millisecond before the crash.
-
----
-
-## 3. Current Benchmarks
-<img width="1210" height="321" alt="LakeStore-benchmark" src="https://github.com/user-attachments/assets/6fcbbbfa-0959-4d7f-8a9c-f8236b9cd047" />
-
-
---
-
-## 4. Executing/testing:
+Prerequisites: CMake ≥ 3.20, a C++17 compiler, Go ≥ 1.22.
 
 ```sh
-mkdir -p build
-cd build
+make build          # builds the C++ engine, then lakestored + lakectl into ./bin
+make cluster-up     # starts a local 3-node cluster on 127.0.0.1:7101-7103
 
-# Configure the project for maximum performance (Release mode)
-cmake -DCMAKE_BUILD_TYPE=Release ..
+./bin/lakectl put hello world
+./bin/lakectl get hello
+./bin/lakectl scan "" 100
+./bin/lakectl status
+./bin/lakectl bench --n 20000 --concurrency 64
 
-# Compile on macOS:
-make -j$(sysctl -n hw.ncpu)
+make cluster-down
+```
 
-# OR Compile on Linux:
-make -j$(nproc)
+Kill any node (including the leader) and the cluster keeps serving; restart
+it and it catches up from the leader's log — or, if the log was compacted,
+via a full snapshot install.
 
-./lakestore_main
+## Testing
 
-./lakestore_test
+```sh
+make test
+```
 
-./lakestore_bench
+runs the full matrix:
 
+- **C++ engine** — 56 GoogleTest cases: unit tests for every component
+  (coding, CRC32C, bloom, blocks, SSTables, WAL, cache, comparators) plus
+  end-to-end flush/compaction/recovery/iterator tests and a multi-threaded
+  stress test. Also verified clean under AddressSanitizer and ThreadSanitizer.
+- **Raft** — a 13-scenario battery in the style of MIT 6.824 (run with
+  `-race`): elections, partitions, divergent-log repair, persistence across
+  crashes, unreliable networks with message loss, snapshot install.
+- **cgo binding** — CRUD, batches, iterators, reopen durability.
+- **Cluster integration** — real 3-node clusters over gRPC: replication to
+  all nodes, leader failover, node restart catch-up, full-cluster restart
+  durability, snapshot catch-up, stale reads.
+
+## Benchmarks
+
+Storage engine (`make bench`, Apple Silicon, release build):
+
+| Benchmark | Throughput | Notes |
+|---|---|---|
+| Sequential writes (WAL, async) | ~460K ops/s | |
+| Writes (WAL disabled) | ~3.6M ops/s | pure memtable |
+| Random reads (memtable) | ~3.0M ops/s | p99 ≈ 0.6µs |
+| Random reads (SSTables) | ~1.2M ops/s | warm block cache |
+| Full scan | ~12.6M entries/s | merged view |
+
+Cluster, 3 nodes on one machine (`lakectl bench`):
+
+| Operation | Throughput | p50 | p99 |
+|---|---|---|---|
+| Replicated writes (64 clients) | ~40K ops/s | 1.4ms | 2.7ms |
+| Linearizable reads (64 clients) | ~72K ops/s | 0.6ms | 1.5ms |
+
+Write throughput comes from batching at two levels: concurrent client
+proposals coalesce into single Raft entries (one fsync + one replication
+round per batch), and the Raft log itself is an append-only file, not a
+rewritten blob.
+
+## Design notes & guarantees
+
+- **Writes** are linearizable: they go through the Raft log and are
+  acknowledged only after commit + local apply.
+- **Reads** (default) are served by the leader after a read barrier (apply
+  catches up to the commit index at read start). A deposed leader can serve
+  a stale read only within one election timeout; use `get-stale` for
+  explicitly cheap follower reads. (Full ReadIndex/lease reads are the
+  natural next step.)
+- **Durability**: entries are fsync'd to the Raft log on a majority before
+  commit. The engine applies them *without* fsync — its WAL replays after a
+  crash, and anything lost below that is re-applied from the Raft log
+  (applies are idempotent via a replicated applied-index marker stored
+  atomically with each batch).
+  On macOS, plain `fsync(2)` is used by default; set `LAKESTORE_FULLFSYNC=1`
+  for `F_FULLFSYNC` power-loss guarantees at a large latency cost.
+- **Log compaction**: after `--snapshot-threshold` applied entries (default
+  8192), each node serializes its full KV state, hands it to Raft, and the
+  log prefix is dropped. Followers that fall behind the compaction horizon
+  are repaired with InstallSnapshot.
+- **Known limitations** (deliberate scope): static membership (no joint
+  consensus), no PreVote (a rejoining node can bump terms), snapshots are
+  monolithic rather than streamed in chunks, and the storage engine runs
+  single-node compactions on one background thread.
+
+## Repository layout
+
+```
+storage-engine/   C++ LSM-tree engine (CMake; tests + benchmarks)
+raft/             Raft consensus package (pure Go, no deps)
+engine/           cgo binding for the engine's C API
+server/           node wiring: FSM, gRPC services, batching, snapshots
+client/           leader-following Go client
+cmd/lakestored    server binary
+cmd/lakectl       CLI client
+api/              protobuf definitions + generated stubs
+scripts/          local cluster helpers
 ```

@@ -38,6 +38,7 @@ set(LAKESTORE_SOURCES
     src/sstable/bloom_filter.cc
     src/cache/lru_cache.cc
     src/db/manifest.cc
+    src/db/table_cache.cc
     src/db/compaction.cc
     src/db/db_impl.cc
     src/c_api/c_api.cc  # <--- ADDED C-API HERE
@@ -50,7 +51,11 @@ find_package(Threads REQUIRED)
 target_link_libraries(lakestore_lib Threads::Threads)
 
 # 4. Define the Unit Test Executable
-add_executable(lakestore_test tests/db_test.cc)
+add_executable(lakestore_test
+    tests/db_test.cc
+    tests/db_disk_test.cc
+    tests/components_test.cc
+)
 target_link_libraries(lakestore_test PRIVATE lakestore_lib gtest_main)
 
 # 5. Define the Benchmark Executable

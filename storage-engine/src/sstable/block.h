@@ -21,7 +21,7 @@ public:
         Iterator(const char* data, uint32_t restarts, uint32_t num_restarts);
         ~Iterator() override = default;
         
-        bool Valid() const override { return current_ < restarts_; }
+        bool Valid() const override { return valid_; }
         Slice key() const override { return Slice(key_); }
         Slice value() const override { return value_; }
         Status status() const override { return Status::OK(); }
@@ -38,9 +38,11 @@ public:
         uint32_t restarts_;
         uint32_t num_restarts_;
         
-        uint32_t current_;
+        uint32_t current_;     // offset of the entry we are positioned on
+        uint32_t next_offset_; // offset where the next entry starts
         uint32_t restart_index_;
-        
+        bool valid_ = false;
+
         std::string key_;
         Slice value_;
     };

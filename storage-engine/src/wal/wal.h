@@ -18,6 +18,9 @@ enum RecordType : uint8_t {
     kLastType   = 4
 };
 
+// A length-prefixed, CRC-protected record log. Records are opaque byte
+// strings; the DB layer frames WriteBatches ([seq][count][ops]) on top of
+// this, and the Manifest frames VersionEdits on top of it.
 class WAL {
 public:
     explicit WAL(const std::string& filename, uint64_t file_number);
@@ -27,23 +30,25 @@ public:
     WAL(const WAL&) = delete;
     WAL& operator=(const WAL&) = delete;
 
-    // Called by multiple threads concurrently.
-    Status Append(WriteBatch* batch);
-    
+    // Append one record. Called by multiple threads concurrently; a group
+    // commit protocol coalesces concurrent appends into a single write().
+    Status AppendRecord(const Slice& record);
+
     // Called on startup to replay records.
-    Status Recover(std::function<Status(const WriteBatch&)> apply_fn);
-    
+    Status Recover(const std::function<Status(const Slice& record)>& apply_fn);
+
     Status Sync();
     uint64_t FileNumber() const { return file_number_; }
+    const std::string& Filename() const { return filename_; }
 
 private:
     struct Writer {
-        WriteBatch* batch;
+        const Slice* record;
         bool done;
         Status status;
         std::condition_variable cv;
-        
-        Writer() : batch(nullptr), done(false) {}
+
+        Writer() : record(nullptr), done(false) {}
     };
 
     std::string filename_;

@@ -7,10 +7,12 @@
 #include "../cache/lru_cache.h"
 #include "../sstable/sstable_reader.h"
 #include "manifest.h"
+#include "table_cache.h"
 #include <mutex>
 #include <condition_variable>
 #include <thread>
 #include <atomic>
+#include <memory>
 
 namespace lakestore {
 
@@ -33,45 +35,71 @@ public:
     Status Get(const ReadOptions& opts, const Slice& key, std::string* value);
     Status Write(const WriteOptions& opts, WriteBatch* batch);
 
+    // User-facing scan: yields user keys/values at a consistent snapshot,
+    // with tombstones and stale MVCC versions collapsed. Caller owns it.
+    lakestore::Iterator* NewIterator();
+
+    // Iterator over the ACTIVE memtable's raw internal keys (tests/tooling).
     lakestore::Iterator* NewInternalIterator();
+
+    // Blocks until every memtable is flushed and no compaction is pending.
+    // Primarily for tests and orderly shutdown.
+    Status FlushAll();
+
+    // Encode/decode a WriteBatch to/from a WAL record:
+    // [fixed64 sequence][fixed32 op_count][ops payload]
+    static void EncodeBatchRecord(SequenceNumber seq, uint32_t count,
+                                  const std::string& payload, std::string* record);
+    static bool DecodeBatchRecord(const Slice& record, SequenceNumber* seq,
+                                  uint32_t* count, Slice* payload);
 
 private:
     DBImpl(const Options& options, const std::string& dbpath);
 
     Status Recover();
-    Status RecoverLogFile(uint64_t log_number, SequenceNumber* max_sequence);
 
-    uint32_t CountOps(const WriteBatch* batch);
-    void DecodeAndInsert(MemTable* mem, SequenceNumber seq, const std::string& payload);
+    static uint32_t CountOps(const WriteBatch* batch);
+    static void DecodeAndInsert(MemTable* mem, SequenceNumber seq, const Slice& payload);
+
+    // Waits/rotates until the active memtable can accept the write.
+    // Called with mutex_ held.
+    Status MakeRoomForWrite(std::unique_lock<std::mutex>& lock);
 
     // Background tasks
-    void MaybeScheduleCompaction();
-    void BGWork();
-    void BackgroundCall();
-    Status BackgroundCompaction();
+    void MaybeScheduleCompaction(); // mutex_ held
+    void BackgroundThreadMain();
+    Status BackgroundCompaction(std::unique_lock<std::mutex>& lock);
+    Status CompactMemTable(std::unique_lock<std::mutex>& lock);
+    Status DoMajorCompaction(std::unique_lock<std::mutex>& lock, int level);
     Status WriteLevel0Table(MemTable* mem, VersionEdit* edit);
+    void RemoveObsoleteFiles(); // mutex_ held
 
     // Concurrency control
     std::mutex mutex_;
-    std::condition_variable bg_cv_;
-    bool bg_compaction_scheduled_ = false;
+    std::condition_variable bg_cv_;      // signaled when background state changes
+    std::condition_variable bg_work_cv_; // wakes the background thread
+    bool bg_work_pending_ = false;
     Status bg_error_; // Catches errors from background thread
     bool shutting_down_ = false;
+    std::thread bg_thread_;
 
     Options options_;
     std::string dbname_;
-    
-    // Memory and Disk structures
-    MemTable* mem_ = nullptr;
-    MemTable* imm_ = nullptr;
+
+    // Memory and Disk structures. Memtables are refcounted because reads
+    // hold them across the mutex being released.
+    std::shared_ptr<MemTable> mem_;
+    std::shared_ptr<MemTable> imm_;
     std::unique_ptr<WAL> wal_;
     std::unique_ptr<Manifest> manifest_;
-    std::unique_ptr<Version> current_version_;
+    std::shared_ptr<const Version> current_version_;
     std::unique_ptr<LRUCache> block_cache_;
+    std::unique_ptr<TableCache> table_cache_;
 
     // State
     std::atomic<SequenceNumber> last_sequence_{0};
-    uint64_t log_file_number_ = 0;
+    uint64_t log_file_number_ = 0;     // log backing mem_
+    uint64_t imm_log_file_number_ = 0; // log backing imm_ (obsolete after flush)
 };
 
 } // namespace lakestore

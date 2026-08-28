@@ -1,42 +1,43 @@
 #include "compaction.h"
-#include "merging_iterator.h"
-#include "../sstable/sstable_reader.h"
-#include <iostream>
+#include <algorithm>
 
 namespace lakestore {
 
-Compaction::Compaction(const Options& options, int level, Version* version)
+Compaction::Compaction(const Options& options, int level, const Version* version)
     : options_(options), level_(level), input_version_(version) {}
 
-void Compaction::AddInputFiles(int level_index, const std::vector<FileMetaData*>& files) {
-    for (auto* f : files) {
-        inputs_[level_index].push_back(f);
+bool Compaction::PickInputs() {
+    const auto& level_files = input_version_->Files(level_);
+    if (level_files.empty()) return false;
+
+    if (level_ == 0) {
+        // L0 files overlap each other, so take them ALL — merging a subset
+        // could surface an older version of a key above a newer one.
+        inputs_[0] = level_files;
+    } else {
+        // Compact the whole level for simplicity. Levels are kept small by
+        // the size thresholds, and this avoids tracking a compaction cursor.
+        inputs_[0] = level_files;
     }
-}
 
-void Compaction::AddOutputFile(uint64_t file_number, uint64_t file_size, 
-                               const InternalKey& smallest, const InternalKey& largest) {
-    edit_.AddFile(level_ + 1, file_number, file_size, smallest, largest);
-}
+    // Compute the combined user-key range of the inputs.
+    std::string smallest = inputs_[0][0].smallest.user_key;
+    std::string largest = inputs_[0][0].largest.user_key;
+    for (const auto& f : inputs_[0]) {
+        if (Slice(f.smallest.user_key).compare(Slice(smallest)) < 0) smallest = f.smallest.user_key;
+        if (Slice(f.largest.user_key).compare(Slice(largest)) > 0) largest = f.largest.user_key;
+    }
 
-Iterator* Compaction::MakeInputIterator() {
-    std::vector<Iterator*> list;
-    ReadOptions r_opts;
-    r_opts.fill_cache = false; // Don't pollute cache during compaction
+    // Pull in every overlapping file from the next level.
+    input_version_->GetOverlappingInputs(level_ + 1, Slice(smallest), Slice(largest), &inputs_[1]);
 
-    for (int i = 0; i < 2; i++) {
-        for (FileMetaData* f : inputs_[i]) {
-            // Note: In a real implementation, you'd track file names via the MANIFEST logic.
-            // Assuming we can derive filename from number:
-            std::string filename = "sst_" + std::to_string(f->number) + ".ldb";
-            SSTableReader* reader = nullptr;
-            if (SSTableReader::Open(filename, &reader).ok()) {
-                // Assuming SSTableReader provides a NewIterator() method returning our generic Iterator*
-                // list.push_back(reader->NewIterator(r_opts));
-            }
+    // Register the inputs for deletion in the resulting edit.
+    for (int which = 0; which < 2; which++) {
+        for (const auto& f : inputs_[which]) {
+            edit_.DeleteFile(f.level, f.number);
         }
     }
-    return new MergingIterator(list);
+    return true;
 }
 
 bool Compaction::ShouldDrop(const InternalKey& ikey, SequenceNumber smallest_snapshot) {
@@ -51,18 +52,17 @@ bool Compaction::ShouldDrop(const InternalKey& ikey, SequenceNumber smallest_sna
         // First time seeing this user_key in the current merge
         current_user_key_ = ikey.user_key;
         has_current_user_key_ = true;
-        last_sequence_for_key_ = ikey.seq;
     }
+    last_sequence_for_key_ = ikey.seq;
 
     // 2. Is it a tombstone (deletion) that can be garbage collected?
     if (ikey.type == kTypeDeletion && ikey.seq <= smallest_snapshot) {
         // We can safely drop a tombstone ONLY if there are no older versions of this key
         // lurking in levels strictly greater than our target output level (level_ + 1).
-        
+
         bool has_older_version = false;
         for (int l = level_ + 2; l < kNumLevels; l++) {
-            FileMetaData* f = input_version_->FindFileInLevel(l, ikey.user_key);
-            if (f != nullptr) {
+            if (input_version_->FindFileInLevel(l, Slice(ikey.user_key)) != nullptr) {
                 has_older_version = true;
                 break;
             }
